@@ -679,7 +679,7 @@ func compileExecutionContract(ir PlannerIR) (string, error) {
 func compactContractIR(ir PlannerIR) contractIR {
 	out := contractIR{
 		Version:          ir.Version,
-		Goal:             ir.Goal,
+		Goal:             useLongerString(ir.SourceEvent, ir.Goal),
 		SourceEvent:      ir.SourceEvent,
 		RuntimeMode:      ir.RuntimeMode,
 		Constraints:      ir.Constraints,
@@ -822,6 +822,16 @@ func canonicalizeIR(ir PlannerIR) PlannerIR {
 		ir.RiskNotes = []string{}
 	}
 	return ir
+}
+
+// useLongerString returns the longer of two strings. When the source_event
+// (full user input) exceeds the summarized goal, the AI should see the full
+// text as the goal so it doesn't miss content from large pasted blocks.
+func useLongerString(a, b string) string {
+	if len(a) > len(b) {
+		return a
+	}
+	return b
 }
 
 func canonicalConstraints(in []Constraint) []Constraint {
