@@ -209,6 +209,7 @@ jobs:
         run: cp signed/*installer*.exe dist/
 
       - name: Sign artifacts (minisign)
+        if: env.MINISIGN_PRIVATE_KEY != ''
         working-directory: desktop
         env:
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
