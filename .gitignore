@@ -54,6 +54,7 @@ node_modules/
 # Editor / OS
 .DS_Store
 Thumbs.db
+.direnv/
 .idea/
 .vscode/
 /site/public/av/

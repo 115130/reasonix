@@ -29,21 +29,39 @@
             # Build/packaging tools
             goreleaser                # Release automation
 
+            # Desktop build prerequisites (Wails + CGO)
+            pkg-config                # Library path resolution
+            gcc                       # C compiler for CGO/WebKitGTK
+
             # Utility
             git
-            nodejs                    # For npm package building
+            nodejs                    # For npm package building + desktop frontend
+          ];
+
+          # Libraries needed for CGO/WebKitGTK (Wails desktop)
+          buildInputs = with pkgs; [
+            gtk3                      # GTK3 toolkit
+            webkitgtk_4_1             # WebKitGTK (webview engine)
+            glib                      # GLib types (gobject-introspection)
+            libsoup_3                 # HTTP client library (WebKit dep)
+            cairo                     # 2D graphics library
+            pango                     # Text layout engine
+            gdk-pixbuf                # Image loading
+            libadwaita                # GNOME styling (optional but system-theme)
           ];
 
           shellHook = ''
             echo "✦ Reasonix dev environment ✦"
             echo "  Go:    $(go version)"
             echo "  Nix:   $(nix --version 2>/dev/null || echo '?')"
+            echo "  CGO:   enabled"
             echo ""
-            echo "Build:  make build     → bin/reasonix"
-            echo "Test:   go test ./..."
-            echo "Lint:   golangci-lint run"
-            echo "Vet:    go vet ./..."
-            echo "Format: gofmt -w ."
+            echo "CLI build:      make build           → bin/reasonix"
+            echo "Desktop build:  cd desktop && wails build  → desktop/build/"
+            echo "Test:           go test ./..."
+            echo "Lint:           golangci-lint run"
+            echo "Vet:            go vet ./..."
+            echo "Format:         gofmt -w ."
           '';
         };
       });
