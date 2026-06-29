@@ -88,7 +88,15 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		}
 		defer func() { c.hooks.Stop(context.Background(), lastAssistantText(c.History()), turn) }()
 	}
-	if err := c.runner.Run(ctx, input); err != nil {
+	c.lastSafeStepIndex = 0
+	stepCtx := agent.WithStepBoundaryNotifier(ctx, func(idx int) {
+		c.mu.Lock()
+		if idx > c.lastSafeStepIndex {
+			c.lastSafeStepIndex = idx
+		}
+		c.mu.Unlock()
+	})
+	if err := c.runner.Run(stepCtx, input); err != nil {
 		// When the user explicitly cancels (Ctrl+C), the incomplete turn's
 		// assistant messages and tool results are already saved to the
 		// session.  If they stay, the next turn's model sees leftover
@@ -97,7 +105,11 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		// continuation instead of a fresh task).  Strip the turn so the
 		// next prompt starts clean.
 		if errors.Is(err, context.Canceled) && c.CancelRequested() {
-			c.stripTurnMessagesAfter(startMessages)
+			rollbackTo := startMessages
+			if c.lastSafeStepIndex > rollbackTo {
+				rollbackTo = c.lastSafeStepIndex
+			}
+			c.stripTurnMessagesAfter(rollbackTo)
 		}
 		return err
 	}
@@ -130,7 +142,11 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	defer c.approval.setPlanAutoApprove(false)
 	if err := o.runComposedSyntheticTurn(ctx, planApprovedMessage); err != nil {
 		if errors.Is(err, context.Canceled) && c.CancelRequested() {
-			c.stripTurnMessagesAfter(execStart)
+			rollbackTo := execStart
+			if c.lastSafeStepIndex > rollbackTo {
+				rollbackTo = c.lastSafeStepIndex
+			}
+			c.stripTurnMessagesAfter(rollbackTo)
 		}
 		return err
 	}

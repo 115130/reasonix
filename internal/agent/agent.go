@@ -57,6 +57,7 @@ type Asker interface {
 type callContextKey struct{}
 type parentSessionContextKey struct{}
 type userImagesContextKey struct{}
+type stepBoundaryKey struct{}
 
 // callContext is the per-call context a tool can read. parentID is the call being
 // executed and sink is the agent's event sink (the `task` tool uses both to nest
@@ -873,6 +874,9 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 				ToolCallID: call.ID,
 				Name:       call.Name,
 			})
+		}
+		if fn := StepBoundaryNotifierFromContext(ctx); fn != nil {
+			fn(len(a.session.Messages))
 		}
 		// If the context was cancelled during tool execution, return after storing
 		// the batch results so the session keeps paired tool-call history.

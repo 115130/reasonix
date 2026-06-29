@@ -154,13 +154,19 @@ type Controller struct {
 
 	// mu guards the run state; every critical section under it is short and
 	// non-blocking.
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	running     bool
-	canceling   bool
-	autosaveWG  sync.WaitGroup
-	planMode    bool
-	sessionPath string
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	running   bool
+	canceling bool
+	// lastSafeStepIndex records the session message count after the last fully
+	// completed tool-call round. When the user cancels mid-turn, the orchestrator
+	// rolls back to this index instead of stripping the entire turn, preserving
+	// completed work while discarding the partial round. Zero means no complete
+	// step yet — fall back to the turn start.
+	lastSafeStepIndex int
+	autosaveWG        sync.WaitGroup
+	planMode          bool
+	sessionPath       string
 	// turn counts model turns this session, passed to hooks in their payload.
 	turn int
 

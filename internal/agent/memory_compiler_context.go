@@ -5,6 +5,26 @@ import (
 	"strings"
 )
 
+// WithStepBoundaryNotifier carries a callback the agent calls after each complete
+// tool-call round (tool calls + results stored), recording the session message
+// count as a safe rollback point. The Controller uses this to preserve completed
+// work when the user cancels mid-turn, rather than stripping the entire turn.
+func WithStepBoundaryNotifier(ctx context.Context, fn func(int)) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, stepBoundaryKey{}, fn)
+}
+
+// StepBoundaryNotifierFromContext returns the step-boundary callback, if any.
+func StepBoundaryNotifierFromContext(ctx context.Context) func(int) {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(stepBoundaryKey{}).(func(int))
+	return fn
+}
+
 type memoryCompilerSourceInputContextKey struct{}
 
 // WithMemoryCompilerSourceInput carries the user's unexpanded turn text for
