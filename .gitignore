@@ -5,6 +5,7 @@
 /npm/.stage/
 /reasonix
 /reasonix.exe
+/reasonix-desktop
 
 # Website (Astro) build output
 /site/dist/
