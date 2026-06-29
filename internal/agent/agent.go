@@ -213,6 +213,14 @@ type Agent struct {
 	lastPrefixShape     PrefixShape
 	haveLastPrefixShape bool
 
+	// loopSchemas caches the tool schemas for one loop iteration, avoiding a
+	// second rebuild inside stream(). Reset before each stream() call.
+	loopSchemas []provider.ToolSchema
+
+	// systemPromptCache caches the concatenated system prompt text, which is
+	// immutable after session construction.
+	systemPromptCache string
+
 	// planMode, when true, refuses any tool call whose ReadOnly() is false.
 	// The system prompt and tool list never change with the toggle so the
 	// prompt-cache prefix stays valid; the gating happens at execute time
@@ -754,6 +762,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(midTurnSteerMessage(text))})
 			a.sink.Emit(event.Event{Kind: event.Steer, Text: text})
 		}
+		a.loopSchemas = a.tools.Schemas()
 		text, reasoning, signature, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
 		if err != nil {
 			if interrupted && streamRecoveries < maxStreamRecoveries {
@@ -778,7 +787,7 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			return err
 		}
 		streamRecoveries = 0
-		schemas := a.tools.Schemas()
+		schemas := a.loopSchemas
 		prefixShape := a.capturePrefixShape(schemas)
 		prevPrefixShape := a.lastPrefixShape
 		if !a.haveLastPrefixShape {
@@ -1388,9 +1397,13 @@ func (a *Agent) stream(ctx context.Context, turn int) (string, string, string, [
 	ctx = provider.WithRetryNotify(ctx, func(info provider.RetryInfo) {
 		a.sink.Emit(event.Event{Kind: event.Retrying, RetryAttempt: info.Attempt, RetryMax: info.Max})
 	})
+	schemas := a.tools.Schemas()
+	if a.loopSchemas != nil {
+		schemas = a.loopSchemas
+	}
 	ch, err := a.prov.Stream(ctx, provider.Request{
 		Messages:    a.session.Messages,
-		Tools:       a.tools.Schemas(),
+		Tools:       schemas,
 		Temperature: a.temperature,
 	})
 	if err != nil {
@@ -1501,6 +1514,9 @@ func (a *Agent) capturePrefixShape(schemas []provider.ToolSchema) PrefixShape {
 }
 
 func (a *Agent) systemPrompt() string {
+	if a.systemPromptCache != "" {
+		return a.systemPromptCache
+	}
 	var b strings.Builder
 	for _, m := range a.session.Messages {
 		if m.Role != provider.RoleSystem {
@@ -1511,7 +1527,8 @@ func (a *Agent) systemPrompt() string {
 		}
 		b.WriteString(m.Content)
 	}
-	return b.String()
+	a.systemPromptCache = b.String()
+	return a.systemPromptCache
 }
 
 // executeBatch dispatches one model turn's tool calls. A ToolDispatch event is
