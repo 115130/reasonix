@@ -175,6 +175,15 @@ func effortArgItems(prior []string, d ArgData) []SlashItem {
 	if len(prior) <= 1 {
 		entry := currentEffortEntry(d)
 		cap := config.EffortCapabilityForEntry(entry)
+		if !cap.Supported || len(cap.Levels) == 0 {
+			// Fall back to standard effort levels when no config is
+			// available or the model's capability is unknown.
+			cap = config.EffortCapability{
+				Supported: true,
+				Levels:    []string{"auto", "high", "max"},
+				Default:   "high",
+			}
+		}
 		var out []SlashItem
 		for _, level := range cap.Levels {
 			hint := ""

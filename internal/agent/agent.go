@@ -218,7 +218,7 @@ type Agent struct {
 	loopSchemas []provider.ToolSchema
 
 	// systemPromptCache caches the concatenated system prompt text, which is
-	// immutable after session construction.
+	// rebuilt after SetSession replaces the session.
 	systemPromptCache string
 
 	// planMode, when true, refuses any tool call whose ReadOnly() is false.
@@ -477,6 +477,7 @@ func (a *Agent) SetSession(s *Session) {
 	a.sessMu.Lock()
 	a.session = s
 	a.sessMu.Unlock()
+	a.systemPromptCache = ""
 	a.sessCacheHit.Store(0)
 	a.sessCacheMiss.Store(0)
 	if s != nil {

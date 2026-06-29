@@ -106,9 +106,11 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		// next prompt starts clean.
 		if errors.Is(err, context.Canceled) && c.CancelRequested() {
 			rollbackTo := startMessages
+			c.mu.Lock()
 			if c.lastSafeStepIndex > rollbackTo {
 				rollbackTo = c.lastSafeStepIndex
 			}
+			c.mu.Unlock()
 			c.stripTurnMessagesAfter(rollbackTo)
 		}
 		return err
@@ -143,9 +145,11 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	if err := o.runComposedSyntheticTurn(ctx, planApprovedMessage); err != nil {
 		if errors.Is(err, context.Canceled) && c.CancelRequested() {
 			rollbackTo := execStart
+			c.mu.Lock()
 			if c.lastSafeStepIndex > rollbackTo {
 				rollbackTo = c.lastSafeStepIndex
 			}
+			c.mu.Unlock()
 			c.stripTurnMessagesAfter(rollbackTo)
 		}
 		return err

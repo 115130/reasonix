@@ -31,7 +31,7 @@ func TestTextSinkReproducesInlineOutput(t *testing.T) {
 	want := "\x1b[2m  ▎ thinking\x1b[0m\n" + // reasoning header
 		"Hello" + // answer delta
 		"\n" + // Message close (no renderer)
-		"  · 1200 tok · in 1000 (900 cached / 100 new) · out 200\n" + // usage
+		"\x1b[2m  · 1200 tok · in 1000 (900 cached / 100 new) · out 200\x1b[0m\n" + // usage
 		"  -> read_file {\"path\":\"a\"}\n" + // tool dispatch
 		// successful read_file result is silent
 		"  ⊘ bash blocked by permission policy\n" + // blocked result
