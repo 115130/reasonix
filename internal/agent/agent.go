@@ -754,13 +754,6 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(midTurnSteerMessage(text))})
 			a.sink.Emit(event.Event{Kind: event.Steer, Text: text})
 		}
-		schemas := a.tools.Schemas()
-		prefixShape := a.capturePrefixShape(schemas)
-		prevPrefixShape := a.lastPrefixShape
-		if !a.haveLastPrefixShape {
-			prevPrefixShape = prefixShape
-		}
-
 		text, reasoning, signature, calls, usage, interrupted, partialToolStarted, err := a.stream(ctx, step+1)
 		if err != nil {
 			if interrupted && streamRecoveries < maxStreamRecoveries {
@@ -785,6 +778,12 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			return err
 		}
 		streamRecoveries = 0
+		schemas := a.tools.Schemas()
+		prefixShape := a.capturePrefixShape(schemas)
+		prevPrefixShape := a.lastPrefixShape
+		if !a.haveLastPrefixShape {
+			prevPrefixShape = prefixShape
+		}
 		cacheDiagnostics := CompareShape(prevPrefixShape, prefixShape, usage)
 		a.lastPrefixShape = prefixShape
 		a.haveLastPrefixShape = true
