@@ -266,7 +266,8 @@ type Agent struct {
 
 	// systemPromptCache caches the concatenated system prompt text, which is
 	// rebuilt after SetSession replaces the session.
-	systemPromptCache string
+	systemPromptCache  string
+	systemPromptCached bool
 
 	// planMode, when true, refuses any tool call whose ReadOnly() is false.
 	// The system prompt and tool list never change with the toggle so the
@@ -726,6 +727,7 @@ func (a *Agent) SetSession(s *Session) {
 	a.session = s
 	a.sessMu.Unlock()
 	a.systemPromptCache = ""
+	a.systemPromptCached = false
 	a.sessCacheHit.Store(0)
 	a.sessCacheMiss.Store(0)
 	if s != nil {
@@ -1949,7 +1951,7 @@ func (a *Agent) capturePrefixShape(schemas []provider.ToolSchema) PrefixShape {
 }
 
 func (a *Agent) systemPrompt() string {
-	if a.systemPromptCache != "" {
+	if a.systemPromptCached {
 		return a.systemPromptCache
 	}
 	var b strings.Builder
@@ -1963,6 +1965,7 @@ func (a *Agent) systemPrompt() string {
 		b.WriteString(m.Content)
 	}
 	a.systemPromptCache = b.String()
+	a.systemPromptCached = true
 	return a.systemPromptCache
 }
 
