@@ -66,6 +66,12 @@ type parentSessionContextKey struct{}
 type subagentDepthContextKey struct{}
 type userImagesContextKey struct{}
 
+// StepBoundaryKey carries a callback that the Run loop fires after each complete
+// tool-call round. The callback receives the current session message count as a
+// safe rollback point — the controller uses it to preserve completed rounds when
+// the user cancels mid-turn.
+type StepBoundaryKey struct{}
+
 // callContext is the per-call context a tool can read. parentID is the call being
 // executed and sink is the agent's event sink (the `task` tool uses both to nest
 // a sub-agent's events under this call); asker lets the `ask` tool reach the user.
@@ -1259,6 +1265,11 @@ func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 			nudge := fmt.Sprintf("Do not call any more tools — your tool-call round limit (%s) has been reached. Instead, synthesize a final answer from all the work already completed: summarize what was accomplished, what remains to be done, and any decisions the user should make. The user can increase %s or continue in the next turn if more work is needed.", a.maxStepsKey, a.maxStepsKey)
 			a.session.Add(provider.Message{Role: provider.RoleUser, Content: a.withTurnPreferences(nudge)})
 			a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: toolBudgetNoticeText(), Detail: fmt.Sprintf("budget (%s=%d) exhausted: one grace round to finalize", a.maxStepsKey, a.maxSteps)})
+		}
+		// Report the current session boundary after each completed tool-call
+		// round so the controller knows where to roll back on cancel.
+		if fn, _ := ctx.Value(StepBoundaryKey{}).(func(int)); fn != nil {
+			fn(a.session.Len())
 		}
 	}
 	// Only reached when a positive maxSteps guard is configured. The work so far

@@ -106,6 +106,10 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	if !turn.synthetic {
 		modelInput = c.withCapabilityRoute(input, turn.raw)
 	}
+	lastSafe := startMessages
+	ctx = context.WithValue(ctx, agent.StepBoundaryKey{}, func(i int) {
+		lastSafe = i
+	})
 	err := c.runner.Run(ctx, modelInput)
 	if err == nil {
 		c.recordAutoResearchEvidenceFromAssistant(autoResearchTaskID, lastAssistantText(c.History()))
@@ -122,9 +126,9 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 		// follow-up questions and resumes do not lose the user's context (#5499).
 		if errors.Is(err, context.Canceled) && c.CancelRequested() {
 			if turn.synthetic || IsSyntheticUserMessage(turn.raw) {
-				c.stripTurnMessagesAfter(startMessages)
+				c.stripTurnMessagesAfter(lastSafe)
 			} else {
-				c.stripCancelledVisibleTurnMessagesAfter(startMessages)
+				c.stripCancelledVisibleTurnMessagesAfter(lastSafe)
 			}
 		}
 		c.clearInFlightTurn()
@@ -157,14 +161,18 @@ func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchest
 	// later turn (even "continue") falls back to the normal per-tool approval.
 	c.approval.setPlanAutoApprove(true)
 	defer c.approval.setPlanAutoApprove(false)
+	execSafe := execStart
+	subCtx := context.WithValue(ctx, agent.StepBoundaryKey{}, func(i int) {
+		execSafe = i
+	})
 	err = func() error {
 		c.markInFlightTurn(execStart, false)
 		defer c.clearInFlightTurn()
-		return o.runComposedSyntheticTurn(ctx, planApprovedMessage)
+		return o.runComposedSyntheticTurn(subCtx, planApprovedMessage)
 	}()
 	if err != nil {
 		if errors.Is(err, context.Canceled) && c.CancelRequested() {
-			c.stripTurnMessagesAfter(execStart)
+			c.stripTurnMessagesAfter(execSafe)
 		}
 		return err
 	}
