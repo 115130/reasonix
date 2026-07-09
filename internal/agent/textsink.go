@@ -169,7 +169,7 @@ func (s *TextSink) closeTextStream(text, reasoning string) {
 // usageLine writes the one-line token/cache summary; no-op when usage is unset.
 func (s *TextSink) usageLine(u *provider.Usage, p *provider.Pricing, d *event.CacheDiagnostics) {
 	if line := FormatUsageLine(u, p, d); line != "" {
-		fmt.Fprintln(s.out, line)
+		fmt.Fprintln(s.out, dimText(line))
 		s.wroteAnything = true
 	}
 }

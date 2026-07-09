@@ -3397,7 +3397,7 @@ func (m *chatTUI) ingestEvent(e event.Event) {
 		}
 		if line := agent.FormatUsageLine(e.Usage, e.Pricing, e.CacheDiagnostics); line != "" {
 			m.finalizeStreamed()
-			m.commitLine(line)
+			m.commitLine(dim(line))
 		}
 
 	case event.Notice:
