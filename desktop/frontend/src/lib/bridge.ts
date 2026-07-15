@@ -8,6 +8,7 @@
 // @ts-ignore `wails generate module` creates this locally; fresh checkouts keep
 // typecheck green by falling back to a disabled drift check below.
 import type * as GeneratedApp from "../../wailsjs/go/main/App";
+import type { InvocationRequest } from "./invocationDisplay";
 
 import { addBreadcrumb } from "./breadcrumbs";
 import { t } from "./i18n";
@@ -26,6 +27,7 @@ import type {
   BotRuntimeStatusView,
   BotSettingsView,
   CapabilitiesView,
+  CapabilityDiagnosticsReport,
   CheckpointMeta,
   CommandInfo,
   ContextInfo,
@@ -35,12 +37,14 @@ import type {
   DroppedItem,
   EffortInfo,
   FilePreview,
+  ExternalOpenersView,
   HistoryMessage,
   HistoryPage,
   HookConfigView,
   HooksSettingsView,
   JobView,
   MCPServerInput,
+  MCPToolView,
   MemorySuggestion,
   MemorySuggestionsView,
   MemoryView,
@@ -66,6 +70,7 @@ import type {
   SkillSuggestion,
   SkillView,
   SlashArgsResult,
+  SubagentProfileInput,
   TabMeta,
   TopicMeta,
   ToolApprovalMode,
@@ -137,6 +142,7 @@ export interface AppBindings {
   SubmitToTab(tabID: string, input: string): Promise<void>;
   SubmitDisplay(display: string, input: string): Promise<void>;
   SubmitDisplayToTab(tabID: string, display: string, input: string): Promise<void>;
+  SubmitInvocationsToTab(tabID: string, display: string, input: string, invocations: InvocationRequest[]): Promise<void>;
   SubmitEditedDisplayToTab(tabID: string, display: string, input: string, original: string): Promise<void>;
   RunShell(command: string): Promise<void>;
   RunShellForTab(tabID: string, command: string): Promise<void>;
@@ -151,19 +157,26 @@ export interface AppBindings {
   ReplayPendingPrompts(): Promise<void>;
   SetPlanMode(on: boolean): Promise<void>;
   SetMode(mode: string): Promise<void>;
-  SetModeForTab(tabID: string, mode: string): Promise<void>;
+  // Resolves with the pending approval prompt ids the switch auto-allowed
+  // (drained); prompts not listed are still pending backend-side (#6432).
+  SetModeForTab(tabID: string, mode: string): Promise<string[] | void>;
   SetAutoApproveTools(on: boolean): Promise<void>;
   SetCollaborationMode(mode: string): Promise<void>;
   SetCollaborationModeForTab(tabID: string, mode: string): Promise<void>;
   SetToolApprovalMode(mode: string): Promise<void>;
-  SetToolApprovalModeForTab(tabID: string, mode: string): Promise<void>;
+  // Same drained-prompt-id contract as SetModeForTab.
+  SetToolApprovalModeForTab(tabID: string, mode: string): Promise<string[] | void>;
   SetGoal(goal: string): Promise<void>;
   SetGoalForTab(tabID: string, goal: string): Promise<void>;
+  ResumeGoalForTab(tabID: string): Promise<boolean>;
   ClearGoal(): Promise<void>;
   ClearGoalForTab(tabID: string): Promise<void>;
   Compact(): Promise<void>;
+  CompactForTab(tabID: string): Promise<void>;
   NewSession(): Promise<void>;
+  NewSessionForTab(tabID: string): Promise<void>;
   ClearSession(): Promise<void>;
+  ClearSessionForTab(tabID: string): Promise<void>;
   History(): Promise<HistoryMessage[]>;
   HistoryForTab(tabID: string): Promise<HistoryMessage[]>;
   HistoryPage(beforeTurn: number, limit: number): Promise<HistoryPage>;
@@ -172,9 +185,13 @@ export interface AppBindings {
   Checkpoints(): Promise<CheckpointMeta[]>;
   CheckpointsForTab(tabID: string): Promise<CheckpointMeta[]>;
   Rewind(turn: number, scope: string): Promise<void>;
+  RewindForTab(tabID: string, turn: number, scope: string): Promise<void>;
   Fork(turn: number): Promise<TabMeta>;
+  ForkForTab(tabID: string, turn: number): Promise<TabMeta>;
   SummarizeFrom(turn: number): Promise<void>;
+  SummarizeFromForTab(tabID: string, turn: number): Promise<void>;
   SummarizeUpTo(turn: number): Promise<void>;
+  SummarizeUpToForTab(tabID: string, turn: number): Promise<void>;
   ListSessions(): Promise<SessionMeta[]>;
   ListTrashedSessions(): Promise<SessionMeta[]>;
   ResumeSession(path: string): Promise<HistoryMessage[]>;
@@ -185,8 +202,10 @@ export interface AppBindings {
   OpenChannelSessionPageForTab(tabID: string, path: string, limit: number): Promise<HistoryPage>;
   PreviewSession(path: string): Promise<HistoryMessage[]>;
   DeleteSession(path: string): Promise<void>;
+  DeleteRecoveryCopy(path: string): Promise<void>;
   RestoreSession(path: string): Promise<void>;
   PurgeTrashedSession(path: string): Promise<void>;
+  PurgeRecoveryCopy(path: string): Promise<void>;
   RenameSession(path: string, title: string): Promise<void>;
   ScanPromptHistory(nonce: string): Promise<PromptHistoryResult>;
   ListWorkspaces(): Promise<WorkspaceView[]>;
@@ -212,6 +231,7 @@ export interface AppBindings {
   Capabilities(): Promise<CapabilitiesView>;
   MCPServers(): Promise<ServerView[]>;
   SkillsSettings(): Promise<SkillsSettingsView>;
+  CapabilityDiagnostics(includeSessionRuntime: boolean): Promise<CapabilityDiagnosticsReport>;
   Plugins(): Promise<PluginView[]>;
   PlanPluginInstall(source: string, options: PluginInstallOptions): Promise<string>;
   InstallPlugin(source: string, options: PluginInstallOptions): Promise<string>;
@@ -234,19 +254,36 @@ export interface AppBindings {
   RefreshSkills(): Promise<void>;
   ReloadCommands(): Promise<void>;
   SetSkillEnabled(name: string, enabled: boolean): Promise<void>;
+  AvailableSubagentTools(): Promise<MCPToolView[]>;
+  CreateSubagentProfile(input: SubagentProfileInput): Promise<string>;
+  UpdateSubagentProfile(name: string, scope: string, input: SubagentProfileInput): Promise<void>;
+  DeleteSubagentProfile(name: string, scope: string): Promise<void>;
+  SetSubagentProfileModel(name: string, ref: string): Promise<void>;
+  SetSubagentProfileEffort(name: string, level: string): Promise<void>;
+  TrySubagentProfile(input: SubagentProfileInput, task: string): Promise<string>;
+  CancelTrySubagentProfile(): Promise<void>;
   SetMCPServerEnabled(name: string, enabled: boolean): Promise<void>;
   SetMCPServerTier(name: string, tier: string): Promise<void>;
   SlashArgs(input: string): Promise<SlashArgsResult>;
   ListDir(rel: string): Promise<DirEntry[]>;
+  ListDirForTab(tabID: string, rel: string): Promise<DirEntry[]>;
   SearchFileRefs(query: string): Promise<DirEntry[]>;
+  SearchFileRefsForTab(tabID: string, query: string): Promise<DirEntry[]>;
   ReadFile(rel: string): Promise<FilePreview>;
+  ReadFileForTab(tabID: string, rel: string): Promise<FilePreview>;
   WorkspaceChanges(tabID: string): Promise<WorkspaceChangesView>;
   GitBranches(): Promise<string[]>;
   GitCheckout(branch: string): Promise<void>;
   WorkspaceGitHistory(tabID: string, path: string): Promise<GitCommitView[]>;
   WorkspaceGitCommitDetail(tabID: string, hash: string, path: string): Promise<GitCommitDetailView>;
   OpenWorkspacePath(rel: string): Promise<void>;
+  OpenWorkspacePathForTab(tabID: string, rel: string): Promise<void>;
+  ExternalOpeners(): Promise<ExternalOpenersView>;
+  SetPreferredExternalOpener(id: string): Promise<void>;
+  OpenWorkspaceInExternalOpener(id: string): Promise<void>;
+  OpenWorkspaceInExternalOpenerForTab(tabID: string, id: string): Promise<void>;
   RevealWorkspacePath(rel: string): Promise<void>;
+  RevealWorkspacePathForTab(tabID: string, rel: string): Promise<void>;
   RevealPath(path: string): Promise<void>;
   SavePastedImage(dataUrl: string): Promise<string>;
   SaveClipboardImage(): Promise<string>;
@@ -629,7 +666,7 @@ function bridgeBreadcrumb(method: string): string {
   if (/^(CheckUpdate|DownloadUpdate|InstallUpdate|ApplyUpdate|OpenDownloadPage)/.test(method)) return `update ${method}`;
   if (/^(AddMCPServer|UpdateMCPServer|RemoveMCPServer|ReconnectMCPServer|ClearMCPServerAuthentication|TrustMCPServerTool|TrustMCPServerTools|UntrustMCPServerTool|SetMCPServer)/.test(method))
     return `mcp ${method}`;
-  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
+  if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion|AvailableSubagentTools|CreateSubagentProfile|UpdateSubagentProfile|DeleteSubagentProfile|SetSubagentProfileModel|SetSubagentProfileEffort|TrySubagentProfile|CancelTrySubagentProfile)/.test(method))
     return `skill ${method}`;
   if (/^(MinimiseMainWindow|ToggleMaximiseMainWindow|IsMainWindowMaximised|CloseMainWindow)$/.test(method)) return `window ${method}`;
   if (/^(OpenProjectTab|OpenGlobalTab|OpenTopicSession|EnsureBlankTab|ActivateTopic|EnsureBlankSurface|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
@@ -740,6 +777,16 @@ function browserPlatformOverride(): "darwin" | "windows" | "linux" | "" {
   if (typeof window === "undefined" || window.runtime) return "";
   const value = new URLSearchParams(window.location.search).get("platform");
   return value === "darwin" || value === "windows" || value === "linux" ? value : "";
+}
+
+function browserPreviewBashSandboxMode(): "enforce" | "off" {
+  return browserPlatformOverride() === "windows" ? "off" : "enforce";
+}
+
+function browserPreviewEffectiveShell(prefer = "auto"): "bash" | "git-bash" | "powershell" | "pwsh" {
+  const normalized = prefer.trim().toLowerCase();
+  if (normalized === "powershell" || normalized === "pwsh") return normalized;
+  return browserPlatformOverride() === "windows" ? "git-bash" : "bash";
 }
 
 function mockScenario(): "demo" | "fresh" | "running" | "guidance" | "sandbox_escape" | "notice" {
@@ -892,6 +939,11 @@ function cloneMockProviderTemplate(id: string, key: string): ProviderView | unde
 const mockPreviewImageDataURL =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='120' viewBox='0 0 160 120'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23f97316'/%3E%3Cstop offset='1' stop-color='%232563eb'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='160' height='120' rx='14' fill='url(%23g)'/%3E%3Ccircle cx='44' cy='38' r='16' fill='%23fff7ed' opacity='.9'/%3E%3Cpath d='M18 96 62 58l24 22 18-16 38 32z' fill='%23ffffff' opacity='.9'/%3E%3C/svg%3E";
 
+function mockExternalOpenerIconDataURL(color: string, label: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${color}"/><text x="32" y="40" text-anchor="middle" font-family="system-ui" font-size="25" font-weight="700" fill="white">${label}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 function makeMockApp(): AppBindings {
   const scenario = mockScenario();
   const freshMock = scenario === "fresh";
@@ -903,6 +955,10 @@ function makeMockApp(): AppBindings {
   let cancelled = false;
   let pendingAskPreview = false;
   let pendingApprovalPreview = false;
+  // Mirrors the last emitted approval preview so mode switches can mirror the
+  // backend drain contract: only non-fresh tools auto-allow; plan/sandbox
+  // escape prompts stay pending and visible.
+  let pendingApprovalPreviewPrompt: { id: string; tool: string } | undefined;
   const globalWorkspaceRoot = "~/Library/Application Support/reasonix/global-workspace";
   let cwd = freshMock ? globalWorkspaceRoot : "~/projects/joyquant-db"; // mutable so PickWorkspace is visible in dev
   let workspaces = freshMock ? [] : ["~/projects/joyquant-db", "~/projects/joyquant-sys", "~/projects/reasonix", "~/projects/blade"];
@@ -959,9 +1015,19 @@ function makeMockApp(): AppBindings {
     { name: "figma", transport: "http", status: "failed", configured: true, autoStart: true, tier: "background", url: "https://mcp.figma.com/mcp", authStatus: "required", authUrl: "https://mcp.figma.com/mcp", tools: 0, prompts: 0, resources: 0, error: "connect: 401 unauthorized" },
   ];
   const capSkills: SkillView[] = [
-    { name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true },
-    { name: "review", description: "Review the staged diff", scope: "project", runAs: "inline", enabled: false },
-    { name: "init", description: "Scaffold a REASONIX.md for this repo", scope: "builtin", runAs: "inline", enabled: true },
+    {
+      name: "explore", description: "Investigate the codebase in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true,
+      allowedTools: ["read_file", "ls", "glob", "grep", "code_index"], invocation: "/explore", invocationMode: "auto",
+      configuredModel: "deepseek/deepseek-v4-pro", configuredEffort: "high",
+    },
+    { name: "research", description: "Combine web_fetch + code reading in an isolated subagent", scope: "builtin", runAs: "subagent", enabled: true, allowedTools: ["read_file", "ls", "glob", "grep", "code_index", "web_fetch"], invocation: "/research", invocationMode: "auto" },
+    { name: "review", description: "Review the staged diff", scope: "project", runAs: "inline", enabled: false, invocation: "/review" },
+    { name: "init", description: "Scaffold a REASONIX.md for this repo", scope: "builtin", runAs: "inline", enabled: true, invocation: "/init" },
+    {
+      name: "my-formatter", description: "Formats code the way I like it", scope: "global", runAs: "subagent", enabled: true,
+      model: "deepseek-pro", effort: "high", allowedTools: ["read_file", "edit_file"], color: "amber", invocation: "/my-formatter", invocationMode: "manual",
+      body: "You are a code formatting assistant. Reformat the given file to match project style without changing behavior.",
+    },
   ];
   let capSkillRoots: SkillRootView[] = [
     { dir: "~/projects/reasonix/.reasonix/skills", scope: "project", priority: 1, status: "missing", configured: false, removable: true, skills: 0 },
@@ -1007,7 +1073,7 @@ function makeMockApp(): AppBindings {
   // Mutable so delete/rename are observable in browser dev.
   const sessions: SessionMeta[] = [
     { path: "/mock/sessions/a.jsonl", preview: "fix the login bug in auth.go", turns: 12, createdAt: t0 - 2 * day, lastActivityAt: t0 - 3_600_000, modTime: t0 - 3_600_000, current: true, open: true },
-    { path: "/mock/sessions/b-recovery-0123456789abcdef.jsonl", preview: "refactor the payment module", turns: 5, createdAt: t0 - 3 * day, lastActivityAt: t0 - 6 * 3_600_000, modTime: t0 - 6 * 3_600_000, current: false, open: true, recovered: true },
+    { path: "/mock/sessions/b-recovery-0123456789abcdef.jsonl", preview: "refactor the payment module", turns: 5, createdAt: t0 - 3 * day, lastActivityAt: t0 - 6 * 3_600_000, modTime: t0 - 6 * 3_600_000, current: false, open: true, recovered: true, recoveryCopy: true },
     { path: "/mock/sessions/c.jsonl", preview: "write the README and badges", turns: 8, createdAt: t0 - 4 * day, lastActivityAt: t0 - day - 3_600_000, modTime: t0 - day - 3_600_000, current: false, open: false },
     { path: "/mock/sessions/d.jsonl", preview: "explain the plugin host design", turns: 3, createdAt: t0 - 5 * day, lastActivityAt: t0 - 4 * day, modTime: t0 - 4 * day, current: false, open: false },
   ];
@@ -1059,6 +1125,7 @@ function makeMockApp(): AppBindings {
       topicId: "topic_product",
       topicTitle: t("mock.trashGlobalProductTitle"),
       recovered: true,
+      recoveryCopy: true,
     },
   ];
   if (freshMock) {
@@ -1080,7 +1147,7 @@ function makeMockApp(): AppBindings {
     ],
     providerPresets: mockProviderPresetViews(),
     permissions: { mode: "ask", allow: ["ls", "read_file"], ask: [], deny: ["Bash(rm:*)"] },
-    sandbox: { bash: "enforce", network: true, workspaceRoot: "", allowWrite: [], effectiveWorkspaceRoot: cwd, effectiveWriteRoots: [cwd], shell: "auto" },
+    sandbox: { bash: browserPreviewBashSandboxMode(), network: true, workspaceRoot: "", allowWrite: [], effectiveWorkspaceRoot: cwd, effectiveWriteRoots: [cwd], shell: "auto", effectiveShell: browserPreviewEffectiveShell("auto") },
     network: {
       proxyMode: "auto",
       proxyUrl: "",
@@ -1230,7 +1297,7 @@ function makeMockApp(): AppBindings {
     displayMode: "compact",
     statusBarStyle: "text",
     statusBarItems: [...DEFAULT_STATUS_BAR_ITEMS],
-    defaultToolApprovalMode: "ask",
+    defaultToolApprovalMode: "auto",
     checkUpdates: true,
     telemetry: true,
     metrics: true,
@@ -1553,6 +1620,7 @@ function makeMockApp(): AppBindings {
         }
         if (tab.topicId === "topic_sys_coord") {
           pendingApprovalPreview = true;
+          pendingApprovalPreviewPrompt = { id: "mock-sys-confirm", tool: "bash" };
           emit({ kind: "reasoning", text: "我已经准备好执行同步脚本，但这个操作会影响本地 workspace，需要用户确认。" });
           await delay(160);
           emit({
@@ -1582,6 +1650,21 @@ function makeMockApp(): AppBindings {
   const emitMockTurnDone = () => {
     setMockTabRunning(currentMockTurnTabId(), false);
     emit({ kind: "turn_done" });
+  };
+  // Fresh user decisions never auto-allow on a posture switch (mirrors the
+  // backend's requiresFreshApprovalTool set).
+  const mockFreshApprovalTools = new Set(["exit_plan_mode", "sandbox_escape", "memory_remember", "memory_forget", "managed_config_write"]);
+  // Mirrors the backend drain contract for the mode-switch bindings: returns
+  // the prompt ids the new posture auto-allowed; fresh prompts stay pending.
+  const drainMockApprovalPreviews = (toolApprovalMode: string): string[] => {
+    if (toolApprovalMode !== "auto" && toolApprovalMode !== "yolo") return [];
+    const prompt = pendingApprovalPreviewPrompt;
+    if (!pendingApprovalPreview || !prompt || mockFreshApprovalTools.has(prompt.tool)) return [];
+    pendingApprovalPreview = false;
+    pendingApprovalPreviewPrompt = undefined;
+    emit({ kind: "message", text: `approval preview auto-allowed (${toolApprovalMode})` });
+    emitMockTurnDone();
+    return [prompt.id];
   };
   let mockTabs: TabMeta[] = noticePreviewMock ? [
     {
@@ -1687,6 +1770,7 @@ function makeMockApp(): AppBindings {
     window.setTimeout(() => {
       if (pendingApprovalPreview) return;
       pendingApprovalPreview = true;
+      pendingApprovalPreviewPrompt = { id: "mock-sandbox-escape-preview", tool: "sandbox_escape" };
       emitMockTurnStarted();
       emit({ kind: "reasoning", text: t("mock.sandboxEscapeReasoning") });
       emit({
@@ -1784,6 +1868,7 @@ function makeMockApp(): AppBindings {
       }
       if (trimmedInput === "/approve-preview" || trimmedInput === "approve preview" || trimmedInput === "approve预览") {
         pendingApprovalPreview = true;
+        pendingApprovalPreviewPrompt = { id: "mock-approval-preview", tool: "bash" };
         await delay(250);
         if (cancelled) return;
         emit({
@@ -1803,6 +1888,7 @@ function makeMockApp(): AppBindings {
         trimmedInput === "sandbox escape预览"
       ) {
         pendingApprovalPreview = true;
+        pendingApprovalPreviewPrompt = { id: "mock-sandbox-escape-preview", tool: "sandbox_escape" };
         await delay(250);
         if (cancelled) return;
         emit({
@@ -1822,6 +1908,7 @@ function makeMockApp(): AppBindings {
         trimmedInput === "plan approve预览"
       ) {
         pendingApprovalPreview = true;
+        pendingApprovalPreviewPrompt = { id: "mock-plan-approval-preview", tool: "exit_plan_mode" };
         await delay(250);
         if (cancelled) return;
         emit({
@@ -1996,6 +2083,18 @@ function makeMockApp(): AppBindings {
       // dev. Bail if cancelled during the wait — nothing was streamed yet.
       await delay(700);
       if (cancelled) return;
+      const reasoningChunks = [
+        "我先判断这是浏览器预览环境，所以不会调用真实 kernel。\n",
+        "接着模拟 provider 的 reasoning delta：先展示思考过程，再切到正式回复。\n",
+        "完成后前端应该把过程区折叠成“已工作 N 秒”。\n",
+      ];
+      for (const chunk of reasoningChunks) {
+        if (cancelled) return;
+        emit({ kind: "reasoning", reasoning: chunk });
+        await delay(520);
+      }
+      if (cancelled) return;
+      await delay(260);
       const reply =
         `You said: **${input}**\n\n` +
         "This is the browser dev mock — the real reply comes from the kernel " +
@@ -2044,6 +2143,9 @@ function makeMockApp(): AppBindings {
         async SubmitDisplayToTab(_tabID, display, input) {
           await withMockTabScope(_tabID, () => this.SubmitDisplay(display, input));
         },
+        async SubmitInvocationsToTab(_tabID, display, input, _invocations) {
+          await withMockTabScope(_tabID, () => this.SubmitDisplay(display, input));
+        },
         async SubmitEditedDisplayToTab(_tabID, display, input, _original) {
           await withMockTabScope(_tabID, () => this.SubmitDisplay(display, input));
         },
@@ -2082,6 +2184,7 @@ function makeMockApp(): AppBindings {
         async Approve(_id, allow, session, persist) {
           if (!pendingApprovalPreview) return;
           pendingApprovalPreview = false;
+          pendingApprovalPreviewPrompt = undefined;
           const suffix = persist ? "grant saved" : session ? "grant active this session" : "allowed once";
           emit({
             kind: "message",
@@ -2119,16 +2222,18 @@ function makeMockApp(): AppBindings {
         },
         async SetModeForTab(tabID, mode) {
           const nextMode = normalizeMode(mode);
-          mockTabs = mockTabs.map((tab) =>
-            tab.id === tabID
-              ? {
-                  ...tab,
-                  mode: nextMode,
-                  collaborationMode: normalizeCollaborationMode(undefined, tab.goal, nextMode),
-                  toolApprovalMode: mockToolApprovalModeAfterModeChange(tab.toolApprovalMode, nextMode),
-                }
-              : tab,
-          );
+          let nextToolApprovalMode: ToolApprovalMode | "" = "";
+          mockTabs = mockTabs.map((tab) => {
+            if (tab.id !== tabID) return tab;
+            nextToolApprovalMode = mockToolApprovalModeAfterModeChange(tab.toolApprovalMode, nextMode);
+            return {
+              ...tab,
+              mode: nextMode,
+              collaborationMode: normalizeCollaborationMode(undefined, tab.goal, nextMode),
+              toolApprovalMode: nextToolApprovalMode,
+            };
+          });
+          return drainMockApprovalPreviews(nextToolApprovalMode);
         },
         async SetCollaborationMode(mode) {
           const active = mockTabs.find((tab) => tab.active);
@@ -2164,6 +2269,7 @@ function makeMockApp(): AppBindings {
                 }
               : tab,
           );
+          return drainMockApprovalPreviews(next);
         },
         async SetGoal(goal) {
           const active = mockTabs.find((tab) => tab.active);
@@ -2183,6 +2289,15 @@ function makeMockApp(): AppBindings {
               : tab,
           );
         },
+        async ResumeGoalForTab(tabID) {
+          let resumed = false;
+          mockTabs = mockTabs.map((tab) => {
+            if (tab.id !== tabID || !tab.goal || tab.goalStatus === "complete") return tab;
+            resumed = true;
+            return { ...tab, goalStatus: "running", collaborationMode: "goal" };
+          });
+          return resumed;
+        },
         async ClearGoal() {
           await this.SetGoal("");
         },
@@ -2190,8 +2305,11 @@ function makeMockApp(): AppBindings {
           await this.SetGoalForTab(tabID, "");
         },
         async Compact() {},
+        async CompactForTab() {},
         async NewSession() {},
+        async NewSessionForTab() {},
         async ClearSession() {},
+        async ClearSessionForTab() {},
     async Checkpoints() {
       return [
         { turn: 0, prompt: "你好呀", files: ["src/App.tsx"], fileCount: 1, turnFileCount: 1, time: Date.now() - 30_000, canCode: true, canConversation: true },
@@ -2201,6 +2319,7 @@ function makeMockApp(): AppBindings {
       return this.Checkpoints();
     },
     async Rewind() {},
+    async RewindForTab() {},
     async Fork() {
       const active = mockTabs.find((tab) => tab.active) ?? mockTabs[0];
       const tab: TabMeta = {
@@ -2214,8 +2333,14 @@ function makeMockApp(): AppBindings {
       mockTabs = [...mockTabs.map((item) => ({ ...item, active: false })), tab];
       return { ...tab };
     },
+    async ForkForTab(tabID, turn) {
+      mockTabs = mockTabs.map((tab) => ({ ...tab, active: tab.id === tabID }));
+      return this.Fork(turn);
+    },
     async SummarizeFrom() {},
+    async SummarizeFromForTab() {},
     async SummarizeUpTo() {},
+    async SummarizeUpToForTab() {},
         async History() {
           return [];
         },
@@ -2300,6 +2425,9 @@ function makeMockApp(): AppBindings {
         });
       }
     },
+    async DeleteRecoveryCopy(path: string) {
+      return this.DeleteSession(path);
+    },
     async RestoreSession(path: string) {
       const i = trashedSessions.findIndex((s) => s.path === path);
       if (i >= 0) {
@@ -2314,6 +2442,9 @@ function makeMockApp(): AppBindings {
     async PurgeTrashedSession(path: string) {
       const i = trashedSessions.findIndex((s) => s.path === path);
       if (i >= 0) trashedSessions.splice(i, 1);
+    },
+    async PurgeRecoveryCopy(path: string) {
+      return this.PurgeTrashedSession(path);
     },
     async RenameSession(path: string, title: string) {
       const s = sessions.find((x) => x.path === path);
@@ -2499,17 +2630,32 @@ function makeMockApp(): AppBindings {
           console.info("mock AutoResearchRecordEvidence");
         },
     async Commands() {
-      return [
-        { name: "new", description: "start new session; save transcript", kind: "builtin" as const },
-        { name: "clear", description: "discard current context", kind: "builtin" as const },
-        { name: "compact", description: "Summarize older history to free up context", kind: "builtin" as const },
-        { name: "model", description: "Switch model", kind: "builtin" as const },
-        { name: "effort", description: "Set reasoning effort", kind: "builtin" as const },
-        { name: "skill", description: "List skills", kind: "builtin" as const },
-        { name: "plugins", description: "Manage plugin packages", kind: "builtin" as const },
-        { name: "explore", description: "Investigate the codebase in an isolated subagent", kind: "skill" as const },
-        { name: "review", description: "Review the staged diff", hint: "[focus]", kind: "custom" as const },
+      const commands: CommandInfo[] = [
+        { name: "new", description: "start new session; save transcript", kind: "builtin" as const, group: "actions" },
+        { name: "clear", description: "discard current context", kind: "builtin" as const, group: "actions" },
+        { name: "compact", description: "Summarize older history to free up context", kind: "builtin" as const, group: "actions" },
+        { name: "model", description: "Switch model", kind: "builtin" as const, group: "actions" },
+        { name: "effort", description: "Set reasoning effort", kind: "builtin" as const, group: "actions" },
+        { name: "skill", description: "List skills", kind: "builtin" as const, group: "skills" },
+        { name: "mcp", description: "Manage MCP servers", kind: "builtin" as const, group: "integrations" },
+        { name: "plugins", description: "Manage plugin packages", kind: "builtin" as const, group: "integrations" },
+        { name: "review", description: "Review the staged diff", hint: "[focus]", kind: "custom" as const, group: "skills" },
       ];
+      const seen = new Set(commands.map((command) => command.name));
+      for (const skill of capSkills) {
+        if (skill.enabled === false) continue;
+        const name = (skill.invocation || `/${skill.name}`).replace(/^\/+/, "");
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        commands.push({
+          name,
+          description: skill.description,
+          kind: skill.runAs === "subagent" ? "subagent" : "skill",
+          group: skill.runAs === "subagent" ? "subagents" : "skills",
+          color: skill.color,
+        });
+      }
+      return commands;
     },
     async Capabilities() {
       return {
@@ -2527,6 +2673,85 @@ function makeMockApp(): AppBindings {
         skills: capSkills.map((s) => ({ ...s })),
         skillRoots: capSkillRoots.map((s) => ({ ...s })),
       };
+    },
+    async CapabilityDiagnostics(includeSessionRuntime: boolean) {
+      const report: CapabilityDiagnosticsReport = {
+        schema_version: 1,
+        root: "<workspace>",
+        live: false,
+        summary: {
+          errors: 0,
+          warnings: 1,
+          infos: includeSessionRuntime ? 1 : 0,
+          instructions: 1,
+          skills: capSkills.length,
+          commands: 0,
+          hooks: 0,
+          plugins: capPlugins.length,
+          mcp_servers: capServers.length,
+        },
+        instructions: { docs: [{ path: "<workspace>/AGENTS.md", scope: "project", order: 1 }] },
+        skills: {
+          roots: [{ path: "<workspace>/.reasonix/skills", scope: "project", status: "ok" }],
+          entries: capSkills.map((s) => ({
+            name: s.name,
+            description: s.description,
+            scope: s.scope,
+            path: "(mock)",
+            status: "winner",
+            run_as: s.runAs,
+          })),
+          winners: capSkills.length,
+          shadowed: 0,
+        },
+        commands: { roots: [], entries: [], winners: 0, shadowed: 0 },
+        hooks: { trusted_project: true, project_defines_hooks: false, sources: [], entries: [] },
+        plugins: {
+          packages: capPlugins.map((p) => ({
+            name: p.name,
+            enabled: p.enabled,
+            root: p.root || "<external>/plugin",
+            skills: p.skills ?? 0,
+            commands: 0,
+            hooks: p.hooks ?? 0,
+            mcp_servers: p.mcpServers ?? 0,
+            status: p.enabled ? "ok" : "disabled",
+          })),
+        },
+        mcp: {
+          servers: capServers.map((s) => ({
+            name: s.name,
+            transport: s.transport || "stdio",
+            start_intent: s.startIntent === "off" ? "off" : "automatic",
+            source: "toml",
+            runtime_status: includeSessionRuntime ? s.status || "connected" : undefined,
+            tool_count: s.tools,
+            env_keys: s.envKeys ?? [],
+            header_keys: s.headerKeys ?? [],
+          })),
+        },
+        issues: [
+          {
+            severity: "warning",
+            code: "skill.missing_description",
+            subsystem: "skills",
+            name: "example",
+            message: "mock warning for browser harness",
+            remediation: "Add a description frontmatter field",
+            settings_tab: "skills",
+          },
+          ...(includeSessionRuntime
+            ? [{
+                severity: "info" as const,
+                code: "mcp.runtime_unavailable",
+                subsystem: "mcp",
+                message: "browser mock has no live Host; runtime fields are synthetic",
+                settings_tab: "mcp",
+              }]
+            : []),
+        ],
+      };
+      return JSON.parse(JSON.stringify(report)) as CapabilityDiagnosticsReport;
     },
     async Plugins() {
       return capPlugins.map((p) => ({ ...p }));
@@ -2721,6 +2946,60 @@ function makeMockApp(): AppBindings {
       const skill = capSkills.find((s) => s.name === name);
       if (skill) skill.enabled = enabled;
     },
+    async AvailableSubagentTools() {
+      return [
+        { name: "read_file", description: "Read a file's contents", readOnlyHint: true },
+        { name: "ls", description: "List a directory", readOnlyHint: true },
+        { name: "glob", description: "Find files by name pattern", readOnlyHint: true },
+        { name: "grep", description: "Search file contents", readOnlyHint: true },
+        { name: "code_index", description: "Look up symbol definitions and file outlines", readOnlyHint: true },
+        { name: "edit_file", description: "Edit an existing file" },
+        { name: "write_file", description: "Write a new file" },
+        { name: "bash", description: "Run a shell command" },
+        { name: "web_fetch", description: "Fetch a URL" },
+      ];
+    },
+    async CreateSubagentProfile(input: SubagentProfileInput) {
+      const name = input.name.trim();
+      const builtinNames = ["init", "explore", "research", "install-capability", "review", "security-review", "test"];
+      if (builtinNames.includes(name)) throw new Error(`"${name}" is a built-in subagent name and cannot be reused`);
+      if (capSkills.some((s) => s.name === name)) throw new Error(`"${name}" already exists`);
+      capSkills.push({
+        name, description: input.description, scope: input.scope === "project" ? "project" : "global",
+        runAs: "subagent", enabled: true, model: input.model, effort: input.effort,
+        allowedTools: input.allowedTools, color: input.color, invocation: `/${name}`, invocationMode: "manual",
+      });
+      return `~/.reasonix/skills/${name}/SKILL.md`;
+    },
+    async UpdateSubagentProfile(name: string, scope: string, input: SubagentProfileInput) {
+      const skill = capSkills.find((s) => s.name === name && s.scope === scope);
+      if (!skill) throw new Error(`"${name}" resolves at a different scope — refusing to update`);
+      skill.description = input.description;
+      skill.color = input.color;
+      skill.model = input.model;
+      skill.effort = input.effort;
+      skill.allowedTools = input.allowedTools;
+    },
+    async DeleteSubagentProfile(name: string, scope: string) {
+      const idx = capSkills.findIndex((s) => s.name === name && s.scope === scope);
+      if (idx < 0) throw new Error(`"${name}" resolves at a different scope — refusing to delete`);
+      capSkills.splice(idx, 1);
+    },
+    async SetSubagentProfileModel(name: string, ref: string) {
+      const skill = capSkills.find((s) => s.name === name);
+      if (skill) skill.configuredModel = ref || undefined;
+    },
+    async SetSubagentProfileEffort(name: string, level: string) {
+      const skill = capSkills.find((s) => s.name === name);
+      if (skill) skill.configuredEffort = level || undefined;
+    },
+    async CancelTrySubagentProfile() {},
+    async TrySubagentProfile(input: SubagentProfileInput, task: string) {
+      if (!task.trim()) throw new Error("task is required");
+      if (!input.systemPrompt.trim()) throw new Error("system prompt is required");
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return `[mock run of "${input.name || "draft"}"]\n\nTask: ${task}\n\n(This is a dev-mode mock response — the real backend runs an isolated subagent loop against your configured model.)`;
+    },
     async SetMCPServerEnabled(name: string, enabled: boolean) {
       capServers = capServers.map((s) =>
         s.name === name
@@ -2795,11 +3074,17 @@ function makeMockApp(): AppBindings {
       }
       return [{ name: "file.go", isDir: false }];
     },
+    async ListDirForTab(_tabID: string, rel: string) {
+      return this.ListDir(rel);
+    },
     async SearchFileRefs(query: string) {
       const q = query.toLowerCase();
       return ["desktop/frontend/src/lib/bridge.ts", "frontend/wailsjs/runtime/runtime.js", "internal/control/refs.go"]
         .filter((path) => path.split("/").pop()?.toLowerCase().includes(q))
         .map((name) => ({ name, isDir: false }));
+    },
+    async SearchFileRefsForTab(_tabID: string, query: string) {
+      return this.SearchFileRefs(query);
     },
     async ReadFile(rel: string) {
       const samples: Record<string, string> = {
@@ -2815,6 +3100,9 @@ function makeMockApp(): AppBindings {
         truncated: false,
         binary: false,
       };
+    },
+    async ReadFileForTab(_tabID: string, rel: string) {
+      return this.ReadFile(rel);
     },
     async WorkspaceChanges(_tabID: string) {
       return {
@@ -2854,8 +3142,30 @@ function makeMockApp(): AppBindings {
     async OpenWorkspacePath(rel: string) {
       console.info("mock OpenWorkspacePath", rel);
     },
+    async OpenWorkspacePathForTab(_tabID: string, rel: string) {
+      await this.OpenWorkspacePath(rel);
+    },
+    async ExternalOpeners() {
+      return {
+        openers: [
+          { id: "vscode", name: "VS Code", kind: "editor", iconDataUrl: mockExternalOpenerIconDataURL("#1684d6", "V") },
+          { id: "cursor", name: "Cursor", kind: "editor", iconDataUrl: mockExternalOpenerIconDataURL("#25262a", "C") },
+          { id: "finder", name: "Finder", kind: "file-manager", iconDataUrl: mockExternalOpenerIconDataURL("#36aaf4", "F") },
+          { id: "ghostty", name: "Ghostty", kind: "terminal", iconDataUrl: mockExternalOpenerIconDataURL("#264db6", ">") },
+        ],
+        preferred: "vscode",
+      } as ExternalOpenersView;
+    },
+    async SetPreferredExternalOpener(_id: string) {},
+    async OpenWorkspaceInExternalOpener(_id: string) {},
+    async OpenWorkspaceInExternalOpenerForTab(_tabID: string, id: string) {
+      await this.OpenWorkspaceInExternalOpener(id);
+    },
     async RevealWorkspacePath(rel: string) {
       console.info("mock RevealWorkspacePath", rel);
+    },
+    async RevealWorkspacePathForTab(_tabID: string, rel: string) {
+      await this.RevealWorkspacePath(rel);
     },
     async RevealPath(path: string) {
       console.info("mock RevealPath", path);
@@ -3220,7 +3530,7 @@ function makeMockApp(): AppBindings {
         async ReloadSettings() {},
         async SetSandbox(bash: string, network: boolean, workspaceRoot: string, allowWrite: string[], shell: string) {
           const effectiveWorkspaceRoot = workspaceRoot.trim() || cwd;
-          settings.sandbox = { bash, network, workspaceRoot, allowWrite, effectiveWorkspaceRoot, effectiveWriteRoots: [effectiveWorkspaceRoot, ...allowWrite], shell };
+          settings.sandbox = { bash, network, workspaceRoot, allowWrite, effectiveWorkspaceRoot, effectiveWriteRoots: [effectiveWorkspaceRoot, ...allowWrite], shell, effectiveShell: browserPreviewEffectiveShell(shell) };
         },
         async SetNetwork(n: NetworkView) {
           settings.network = n;

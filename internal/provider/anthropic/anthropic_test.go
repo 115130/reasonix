@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -95,6 +96,67 @@ func TestBuildRequestNoSystem(t *testing.T) {
 	// A tool with no schema gets a minimal valid object schema.
 	if string(r.Tools[0].InputSchema) != `{"type":"object","properties":{}}` {
 		t.Fatalf("empty schema not defaulted: %s", r.Tools[0].InputSchema)
+	}
+}
+
+func TestStreamAnnotatesIndexedToolSchemaError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Tool 1 function has invalid 'parameters' schema"}}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(provider.Config{Name: "mimo-anthropic", BaseURL: srv.URL, Model: "mimo-v2.5-pro", APIKey: "k"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = p.Stream(context.Background(), provider.Request{
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "hi"}},
+		Tools: []provider.ToolSchema{
+			{Name: "read_file", Parameters: json.RawMessage(`{"type":"object"}`)},
+			{Name: "mcp__files__search", Parameters: json.RawMessage(`{"type":"object"}`)},
+		},
+	})
+	var apiErr *provider.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.ToolContext, `MCP server "files"`) {
+		t.Fatalf("Stream error = %v, want MCP tool source context", err)
+	}
+}
+
+func TestBuildRequestScopesLegacyTupleMigrationToMiMo(t *testing.T) {
+	legacy := json.RawMessage(`{"type":"object","properties":{"pair":{"type":"array","items":[{"type":"string"},{"type":"number"}]}}}`)
+	req := provider.Request{Tools: []provider.ToolSchema{{Name: "tuple", Parameters: legacy}}}
+
+	mimo := (&client{mimo: true}).buildRequest(req)
+	if got := string(mimo.Tools[0].InputSchema); !strings.Contains(got, `"prefixItems"`) || strings.Contains(got, `"items":[`) {
+		t.Fatalf("MiMo parameters = %s, want Draft 2020-12 tuple keywords", got)
+	}
+
+	other := (&client{}).buildRequest(req)
+	if got := string(other.Tools[0].InputSchema); got != string(legacy) {
+		t.Fatalf("non-MiMo parameters changed:\n got: %s\nwant: %s", got, legacy)
+	}
+}
+
+func TestNewDetectsMiMoSchemaDialect(t *testing.T) {
+	for _, tc := range []struct {
+		baseURL string
+		want    bool
+	}{
+		{"https://api.xiaomimimo.com/anthropic", true},
+		{"https://token-plan-cn.xiaomimimo.com/anthropic", true},
+		{"https://token-plan-sgp.xiaomimimo.com/anthropic", true},
+		{"https://token-plan-ams.xiaomimimo.com/anthropic", true},
+		{"https://api.anthropic.com", false},
+		{"https://api.minimaxi.com/anthropic", false},
+	} {
+		p, err := New(provider.Config{Name: "test", BaseURL: tc.baseURL, Model: "model"})
+		if err != nil {
+			t.Fatalf("New(%q): %v", tc.baseURL, err)
+		}
+		if got := p.(*client).mimo; got != tc.want {
+			t.Errorf("New(%q).mimo = %v, want %v", tc.baseURL, got, tc.want)
+		}
 	}
 }
 
@@ -291,12 +353,12 @@ func TestBuildRequestThinkingOff(t *testing.T) {
 	}
 }
 
-func TestBuildRequestDropsMemoryCitations(t *testing.T) {
+func TestBuildRequestDropsLocalMetadata(t *testing.T) {
 	c := &client{model: "claude-opus-4-8"}
 	r := c.buildRequest(provider.Request{Messages: []provider.Message{
 		{Role: provider.RoleUser, Content: "continue"},
 		{Role: provider.RoleUser, Content: "edited prompt", Edited: true, Original: "original prompt"},
-		{Role: provider.RoleAssistant, Content: "done", MemoryCitations: []provider.MemoryCitation{{
+		{Role: provider.RoleAssistant, Content: "done", WorkDurationMs: 24_000, MemoryCitations: []provider.MemoryCitation{{
 			ID: "mem-1", Source: "MEMORY.md", LineStart: 116, LineEnd: 123, Note: "workflow",
 		}}},
 	}})
@@ -306,6 +368,9 @@ func TestBuildRequestDropsMemoryCitations(t *testing.T) {
 	}
 	if strings.Contains(string(b), "memoryCitations") || strings.Contains(string(b), "MEMORY.md") {
 		t.Fatalf("local memory citations leaked into Anthropic request: %s", b)
+	}
+	if strings.Contains(string(b), "workDurationMs") || strings.Contains(string(b), "work_duration_ms") {
+		t.Fatalf("local work duration leaked into Anthropic request: %s", b)
 	}
 	if strings.Contains(string(b), "original prompt") || strings.Contains(string(b), `"edited"`) || strings.Contains(string(b), `"original"`) {
 		t.Fatalf("local edit metadata leaked into Anthropic request: %s", b)

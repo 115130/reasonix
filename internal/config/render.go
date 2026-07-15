@@ -104,6 +104,11 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		} else {
 			b.WriteString("# theme_style = \"graphite\"   # graphite|aurora|slate|carbon|nocturne|amber and legacy aliases\n")
 		}
+		if opener := c.DesktopExternalOpener(); opener != "" {
+			fmt.Fprintf(&b, "external_opener = %q   # desktop Open control: installed application id\n", opener)
+		} else {
+			b.WriteString("# external_opener = \"vscode\"   # desktop Open control: installed application id\n")
+		}
 		fmt.Fprintf(&b, "close_behavior = %q   # desktop: quit|background when the window close button is clicked\n", c.DesktopCloseBehavior())
 		fmt.Fprintf(&b, "status_bar_style = %q   # desktop: icon|text metric labels in the bottom status bar\n", c.DesktopStatusBarStyle())
 		fmt.Fprintf(&b, "status_bar_items = %s   # desktop: ordered visible bottom status bar items\n", renderStringArray(c.DesktopStatusBarItems()))
@@ -111,13 +116,25 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		fmt.Fprintf(&b, "check_updates = %v   # desktop: check for new versions on startup\n", c.DesktopCheckUpdates())
 		fmt.Fprintf(&b, "telemetry = %v   # desktop: anonymous launch ping (install id + version + OS); never content\n", c.DesktopTelemetry())
 		fmt.Fprintf(&b, "metrics = %v   # desktop: aggregate desktop metrics (anonymous signal/bucket counts); never content\n", c.DesktopMetrics())
-		if len(c.Desktop.ProviderAccess) > 0 {
+		// A non-nil empty slice is intentional: provider_access = [] means the
+		// user removed every desktop access entry. Omitting it would make the next
+		// load treat the config as legacy and infer access again.
+		if c.Desktop.ProviderAccess != nil {
 			fmt.Fprintf(&b, "provider_access = %s   # desktop settings: providers shown on Settings > Model > Access\n", renderStringArray(c.Desktop.ProviderAccess))
 		}
 		fmt.Fprintf(&b, "expand_thinking = %v   # desktop: show reasoning text expanded by default; false = collapsed\n", c.Desktop.ExpandThinking)
 		fmt.Fprintf(&b, "display_mode = %q   # desktop: standard|compact transcript display mode\n", c.DesktopDisplayMode())
 		b.WriteString("\n")
+	} else if c.Desktop.ProviderAccess != nil {
+		// provider_access is intentionally mergeable across user and project
+		// configs. It is the only desktop field written to reasonix.toml: local
+		// providers then appear in that workspace's desktop model switcher without
+		// copying user-global appearance or security preferences into the project.
+		b.WriteString("[desktop]\n")
+		fmt.Fprintf(&b, "provider_access = %s   # providers available to this workspace in the desktop model switcher\n\n", renderStringArray(c.Desktop.ProviderAccess))
+	}
 
+	if scope != RenderScopeProject {
 		b.WriteString("[notifications]\n")
 		fmt.Fprintf(&b, "enabled = %v   # system notifications for CLI and desktop turns; default off\n", c.Notifications.Enabled)
 		fmt.Fprintf(&b, "turn_done = %v   # notify when a turn finishes\n", c.Notifications.TurnDone)
@@ -183,18 +200,6 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		fmt.Fprintf(&b, "system_prompt_file = %q\n", c.Agent.SystemPromptFile)
 	} else {
 		b.WriteString("# system_prompt_file = \"prompts/system.md\"   # overrides system_prompt when set\n")
-	}
-	if scope != RenderScopeProject {
-		if c.Agent.MaxSteps != defaults.Agent.MaxSteps {
-			fmt.Fprintf(&b, "max_steps         = %d   # executor tool-call rounds; 0 = no limit\n", c.Agent.MaxSteps)
-		} else {
-			b.WriteString("# max_steps         = 0   # executor tool-call rounds; 0 = no limit\n")
-		}
-		if c.Agent.PlannerMaxSteps != defaults.Agent.PlannerMaxSteps {
-			fmt.Fprintf(&b, "planner_max_steps = %d   # planner read-only tool-call rounds; 0 = no limit\n", c.Agent.PlannerMaxSteps)
-		} else {
-			b.WriteString("# planner_max_steps = 0    # planner read-only tool-call rounds; 0 = no limit\n")
-		}
 	}
 	fmt.Fprintf(&b, "temperature       = %s\n", formatFloat(c.Agent.Temperature))
 	if scope != RenderScopeProject {
@@ -435,8 +440,8 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 	b.WriteString("# Confine tool blast radius. File-writers (write_file/edit_file/multi_edit/move_file)\n")
 	b.WriteString("# may only write under workspace_root (empty = current dir) and allow_write extras.\n")
 	b.WriteString("# bash = \"enforce\" jails each command in an OS sandbox when available;\n")
-	b.WriteString("# without one, bash execution is refused. Empty defaults to enforce on macOS/Linux\n")
-	b.WriteString("# and off on Windows. Set bash = \"off\" to restore pre-1.16 unconfined shell execution.\n")
+	b.WriteString("# without one, bash execution is refused. Empty defaults to enforce on macOS/Linux.\n")
+	b.WriteString("# Windows has no OS-level Bash sandbox and fixes bash = \"off\".\n")
 	b.WriteString("# network allows sandboxed bash egress.\n")
 	if c.Sandbox.WorkspaceRoot != "" {
 		fmt.Fprintf(&b, "workspace_root = %q\n", c.Sandbox.WorkspaceRoot)
@@ -521,6 +526,12 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 				renderBotRoute(&b, route)
 			}
 		}
+		if len(c.Bot.DesktopWatchers) > 0 {
+			for _, watcher := range c.Bot.DesktopWatchers {
+				b.WriteString("\n[[bot.desktop_watchers]]\n")
+				renderBotDesktopWatcher(&b, watcher)
+			}
+		}
 		b.WriteString("\n[bot.pairing]\n")
 		fmt.Fprintf(&b, "enabled = %v\n", c.Bot.Pairing.Enabled)
 		if c.Bot.Pairing.RequestTTLMinutes > 0 {
@@ -574,6 +585,9 @@ func RenderTOMLForScope(c *Config, scope RenderScope) string {
 		fmt.Fprintf(&b, "mode = %q\n", c.Bot.Feishu.Mode)
 		fmt.Fprintf(&b, "webhook_port = %d\n", c.Bot.Feishu.WebhookPort)
 		fmt.Fprintf(&b, "require_mention = %v\n", c.Bot.Feishu.RequireMention)
+		if len(c.Bot.Feishu.OutboundMediaRoots) > 0 {
+			fmt.Fprintf(&b, "outbound_media_roots = %s\n", renderStringArray(c.Bot.Feishu.OutboundMediaRoots))
+		}
 		b.WriteString("\n[bot.weixin]\n")
 		fmt.Fprintf(&b, "enabled = %v\n", c.Bot.Weixin.Enabled)
 		fmt.Fprintf(&b, "account_id = %q\n", c.Bot.Weixin.AccountID)
@@ -1047,22 +1061,27 @@ func RenderTOMLProjectDelta(c *Config) string {
 
 	// [sandbox]
 	if !reflect.DeepEqual(c.Sandbox, d.Sandbox) {
-		b.WriteString("[sandbox]\n")
+		var sandboxBuf strings.Builder
 		if c.Sandbox.WorkspaceRoot != "" {
-			fmt.Fprintf(&b, "workspace_root = %q\n", c.Sandbox.WorkspaceRoot)
+			fmt.Fprintf(&sandboxBuf, "workspace_root = %q\n", c.Sandbox.WorkspaceRoot)
 		}
 		if len(c.Sandbox.AllowWrite) > 0 {
-			fmt.Fprintf(&b, "allow_write = %s\n", renderStringArray(c.Sandbox.AllowWrite))
+			fmt.Fprintf(&sandboxBuf, "allow_write = %s\n", renderStringArray(c.Sandbox.AllowWrite))
 		}
-		// Only an explicitly set bash mode is a project delta; an empty value
-		// inherits the platform default.
-		if strings.TrimSpace(c.Sandbox.Bash) != "" {
-			fmt.Fprintf(&b, "bash = %q\n", c.BashMode())
+		// Only persist a bash mode when its effective value differs from the
+		// platform default. On Windows, even explicit "enforce" currently
+		// resolves to "off", so project configs should not imply otherwise.
+		if strings.TrimSpace(c.Sandbox.Bash) != "" && c.BashMode() != d.BashModeForGOOS(runtimeGOOS) {
+			fmt.Fprintf(&sandboxBuf, "bash = %q\n", c.BashMode())
 		}
 		if c.Sandbox.Network != d.Sandbox.Network {
-			fmt.Fprintf(&b, "network = %v\n", c.Sandbox.Network)
+			fmt.Fprintf(&sandboxBuf, "network = %v\n", c.Sandbox.Network)
 		}
-		b.WriteString("\n")
+		if sandboxBuf.Len() > 0 {
+			b.WriteString("[sandbox]\n")
+			b.WriteString(sandboxBuf.String())
+			b.WriteString("\n")
+		}
 	}
 
 	// [statusline]
@@ -1606,6 +1625,24 @@ func renderBotRoute(b *strings.Builder, route BotRouteConfig) {
 	}
 	if strings.TrimSpace(route.WorkspaceRoot) != "" {
 		fmt.Fprintf(b, "workspace_root = %q\n", strings.TrimSpace(route.WorkspaceRoot))
+	}
+}
+
+func renderBotDesktopWatcher(b *strings.Builder, watcher BotDesktopWatcherConfig) {
+	if strings.TrimSpace(watcher.Platform) != "" {
+		fmt.Fprintf(b, "platform = %q\n", strings.TrimSpace(watcher.Platform))
+	}
+	if strings.TrimSpace(watcher.ConnectionID) != "" {
+		fmt.Fprintf(b, "connection_id = %q\n", strings.TrimSpace(watcher.ConnectionID))
+	}
+	if strings.TrimSpace(watcher.Domain) != "" {
+		fmt.Fprintf(b, "domain = %q\n", strings.TrimSpace(watcher.Domain))
+	}
+	if strings.TrimSpace(watcher.ChatType) != "" {
+		fmt.Fprintf(b, "chat_type = %q\n", strings.TrimSpace(watcher.ChatType))
+	}
+	if strings.TrimSpace(watcher.ChatID) != "" {
+		fmt.Fprintf(b, "chat_id = %q\n", strings.TrimSpace(watcher.ChatID))
 	}
 }
 

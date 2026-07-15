@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"reasonix/internal/fileutil"
+	fileencoding "reasonix/internal/fileutil/encoding"
 	"reasonix/internal/provider"
 )
 
@@ -1844,10 +1845,17 @@ var verificationCommandMarkers = []string{
 }
 
 func isVerificationToolRecord(rec ToolRecord) bool {
-	if rec.Blocked || !strings.EqualFold(strings.TrimSpace(rec.Name), "bash") {
+	return !rec.Blocked && IsVerificationToolCall(rec.Name, rec.Args)
+}
+
+// IsVerificationToolCall reports whether a persisted tool call is a shell
+// command whose exit status provides implementation evidence. It intentionally
+// returns only a boolean so diagnostic callers never need to expose arguments.
+func IsVerificationToolCall(name, args string) bool {
+	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
 		return false
 	}
-	args := strings.ToLower(rec.Args)
+	args = strings.ToLower(args)
 	if args == "" {
 		return false
 	}
@@ -2973,7 +2981,7 @@ func (r *Runtime) loadState() state {
 func (r *Runtime) loadStateLocked() state {
 	var st state
 	path := filepath.Join(r.dir, stateFile)
-	b, err := os.ReadFile(path)
+	b, err := fileencoding.ReadFileUTF8(path)
 	if err != nil {
 		return state{NoisyRefs: map[string]int{}}
 	}
@@ -3015,7 +3023,7 @@ func appendBoundedJSONL(path string, v any, maxLines int) error {
 	if err != nil {
 		return err
 	}
-	existing, err := os.ReadFile(path)
+	existing, err := fileencoding.ReadFileUTF8(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}

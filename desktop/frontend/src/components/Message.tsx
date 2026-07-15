@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { BrainCircuit, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Image, MessageSquare, Pencil, RotateCcw, ScrollText } from "lucide-react";
 import { Markdown } from "./Markdown";
@@ -16,11 +16,14 @@ import { useGSAPCollapse } from "../lib/useGSAPCollapse";
 import { displayReasoningText } from "../lib/reasoningDisplay";
 import { stripMemoryCompilerExecution } from "../lib/memoryCompilerDisplay";
 import { visibleTranscriptMemoryCitations } from "../lib/memoryCitationVisibility";
+import { invocationSegmentsFromMessage, type InvocationMetadataMap } from "../lib/invocationDisplay";
 import type { Item, MessageActionScope } from "../lib/useController";
 import type { CheckpointMeta, MemoryCitation } from "../lib/types";
+import { InvocationBadge } from "./InvocationBadge";
 
 type AssistantItem = Extract<Item, { kind: "assistant" }>;
 export type TurnActionMenu = "summary" | "rewind";
+export const InvocationMetadataContext = createContext<InvocationMetadataMap>({});
 type ImSourceMessage = {
   provider: string;
   label: string;
@@ -193,10 +196,13 @@ export function UserMessage({
   editDisabled?: boolean;
 }) {
   const t = useT();
+  const invocationMetadata = useContext(InvocationMetadataContext);
   const imSource = parseImSourceMessage(text);
   const actionText = stripMemoryCompilerExecution(imSource?.text ?? text);
   const hasMemoryCompiler = Boolean(submitText?.includes("<memory-compiler-execution>"));
   const { text: displayText, attachments } = parseAttachmentRefsForDisplay(actionText);
+  const invocationSegments = imSource ? [] : invocationSegmentsFromMessage(displayText, submitText, invocationMetadata);
+  const hasInvocationSegments = invocationSegments.some((segment) => segment.type === "invocation");
   const orderedAttachments = sortDisplayAttachments(attachments);
   const sourceLabel = imSource ? imSourceLabel(imSource, t) : "";
   const sentAt = createdAt === undefined ? null : messageDate(createdAt);
@@ -442,7 +448,20 @@ export function UserMessage({
           </div>
         ) : (
           <>
-            {displaySegments.map((seg, i) => {
+            {hasInvocationSegments && pasteBlocks.length === 0 ? (
+              <div className="msg__text msg__rich-text">
+                {invocationSegments.map((segment, index) => segment.type === "text"
+                  ? <span key={`text:${segment.start}:${index}`}>{segment.content}</span>
+                  : (
+                    <InvocationBadge
+                      key={`invocation:${segment.invocation.name}:${segment.offset}:${index}`}
+                      invocation={segment.invocation}
+                      kind={segment.invocation.kind}
+                      variant="message"
+                    />
+                  ))}
+              </div>
+            ) : displaySegments.map((seg, i) => {
               if (seg.type === "text") {
                 return seg.content ? <div className="msg__text" key={`s${i}`}>{seg.content}</div> : null;
               }
@@ -770,20 +789,24 @@ export function TurnActions({
   );
 }
 
-export const AssistantMessage = memo(function AssistantMessage({
+function reasoningDurationLabel(durationMs: number | undefined, t: ReturnType<typeof useT>): string {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return t("msg.thinkingDone");
+  }
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  return t("msg.thinkingDuration", { s: seconds });
+}
+
+function ReasoningPanel({
   item,
-  defaultExpanded = false,
-  expandWhileStreaming = true,
-  truncateStreamingReasoning = false,
-  creationMode = false,
+  defaultExpanded,
+  expandWhileStreaming,
+  truncateStreamingReasoning,
 }: {
   item: AssistantItem;
-  defaultExpanded?: boolean;
-  /** false in compact mode: completed steps fold away, so auto-open + fold reads as flicker. */
-  expandWhileStreaming?: boolean;
-  /** Opt-in for compact mode to keep live DeepSeek reasoning from growing an unbounded DOM. */
-  truncateStreamingReasoning?: boolean;
-  creationMode?: boolean;
+  defaultExpanded: boolean;
+  expandWhileStreaming: boolean;
+  truncateStreamingReasoning: boolean;
 }) {
   const t = useT();
   const reasoningBodyRef = useRef<HTMLDivElement>(null);
@@ -811,7 +834,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       if (defaultExpanded) {
         setReasoningOpen(true);
       } else if (!userOverridden.current) {
-        setReasoningOpen(expandWhileStreaming);
+        setReasoningOpen(expandWhileStreaming && !nowRC);
       }
     } else if (nowRC && !wasRC) {
       // Reasoning just finished — auto-close while we wait for text.
@@ -830,35 +853,64 @@ export const AssistantMessage = memo(function AssistantMessage({
     userOverridden.current = true;
     setReasoningOpen((v) => !v);
   };
-  const hasText = item.streaming || item.text.trim() !== "";
-  const processOnly = Boolean(item.reasoning) && !hasText;
-  const processWithText = Boolean(item.reasoning) && hasText;
+  const isReasoningRunning = item.streaming && !item.reasoningComplete;
   const visibleReasoning = reasoningOpen
     ? displayReasoningText(item.reasoning, {
         streaming: item.streaming,
         truncateStreaming: truncateStreamingReasoning,
       })
     : "";
+  const label = isReasoningRunning ? t("msg.thinkingRunning") : t("msg.thinking");
+  const meta = isReasoningRunning ? "" : reasoningDurationLabel(item.reasoningDurationMs, t);
+
+  return (
+    <div className="reasoning">
+      <button
+        type="button"
+        className="reasoning__head"
+        data-running={isReasoningRunning ? "" : undefined}
+        onClick={toggleReasoning}
+        aria-expanded={reasoningOpen}
+      >
+        <ProcessBrainIcon size={12} />
+        <span data-creation-label={t("creation.reasoningLabel")}>{label}</span>
+        {meta && <span className="reasoning__meta">{meta}</span>}
+        <ChevronRight className={`reasoning__chevron${reasoningOpen ? " reasoning__chevron--open" : ""}`} size={12} />
+      </button>
+      {reasoningOpen && (
+        <div ref={reasoningBodyRef} className="reasoning__body">{visibleReasoning}</div>
+      )}
+    </div>
+  );
+}
+
+export const AssistantMessage = memo(function AssistantMessage({
+  item,
+  defaultExpanded = false,
+  expandWhileStreaming = true,
+  truncateStreamingReasoning = false,
+  creationMode = false,
+}: {
+  item: AssistantItem;
+  defaultExpanded?: boolean;
+  /** false in compact mode: completed steps fold away, so auto-open + fold reads as flicker. */
+  expandWhileStreaming?: boolean;
+  /** Opt-in for compact mode to keep live DeepSeek reasoning from growing an unbounded DOM. */
+  truncateStreamingReasoning?: boolean;
+  creationMode?: boolean;
+}) {
+  const hasText = item.streaming || item.text.trim() !== "";
+  const processOnly = Boolean(item.reasoning) && !hasText;
+  const processWithText = Boolean(item.reasoning) && hasText;
   return (
     <div className={`msg msg--assistant${processOnly ? " msg--process-only" : ""}${processWithText ? " msg--process-with-text" : ""}`} data-history-restore={item.id.startsWith("h") ? "" : undefined} data-entrance={item.id}>
       {item.reasoning && (
-        <div className="reasoning">
-          <button
-            type="button"
-            className="reasoning__head"
-            data-running={item.streaming && !item.reasoningComplete ? "" : undefined}
-            onClick={toggleReasoning}
-            aria-expanded={reasoningOpen}
-          >
-            <ProcessBrainIcon size={12} />
-            <span data-creation-label={t("creation.reasoningLabel")}>{t("msg.thinking")}</span>
-            <span className="reasoning__meta">{item.streaming && !item.reasoningComplete ? t("msg.thinkingRunning") : t("msg.thinkingDone")}</span>
-            <ChevronRight className={`reasoning__chevron${reasoningOpen ? " reasoning__chevron--open" : ""}`} size={12} />
-          </button>
-          {reasoningOpen && (
-            <div ref={reasoningBodyRef} className="reasoning__body">{visibleReasoning}</div>
-          )}
-        </div>
+        <ReasoningPanel
+          item={item}
+          defaultExpanded={defaultExpanded}
+          expandWhileStreaming={expandWhileStreaming}
+          truncateStreamingReasoning={truncateStreamingReasoning}
+        />
       )}
       {hasText && (
         <div className="msg__body">

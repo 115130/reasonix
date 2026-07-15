@@ -150,6 +150,41 @@ type recordingSessionRunner struct {
 	memoryCompilerInputs []string
 }
 
+type deliveryScopeErrorRunner struct {
+	scopes []agent.DeliveryExecutionScope
+}
+
+func (r *deliveryScopeErrorRunner) Run(ctx context.Context, _ string) error {
+	if scope, ok := agent.DeliveryExecutionScopeFromContext(ctx); ok {
+		r.scopes = append(r.scopes, scope)
+	}
+	return &agent.FinalReadinessError{Attempts: 3, Reason: "missing verification"}
+}
+
+func TestGoalReadinessFailureBlocksAndKeepsDeliveryScope(t *testing.T) {
+	runner := &deliveryScopeErrorRunner{}
+	c := New(Options{Runner: runner})
+	c.SetGoal("ship the integration")
+
+	err := newTurnOrchestrator(c).runGoalLoopWithRawDisplay(context.Background(), "start", "start", "")
+	var readiness *agent.FinalReadinessError
+	if !errors.As(err, &readiness) {
+		t.Fatalf("run err = %v, want FinalReadinessError", err)
+	}
+	if got := c.GoalStatus(); got != GoalStatusBlocked {
+		t.Fatalf("GoalStatus = %q, want blocked", got)
+	}
+	if len(runner.scopes) != 1 || runner.scopes[0].ID == "" || runner.scopes[0].TaskText != "ship the integration" {
+		t.Fatalf("delivery scopes = %+v", runner.scopes)
+	}
+	if !c.ResumeGoal() || c.GoalStatus() != GoalStatusRunning {
+		t.Fatal("blocked Goal should resume with its existing scope")
+	}
+	if id, task, ok := c.goals.deliveryScope(); !ok || id != runner.scopes[0].ID || task != "ship the integration" {
+		t.Fatalf("resumed scope = (%q, %q, %v), want preserved id/task", id, task, ok)
+	}
+}
+
 func (r *recordingSessionRunner) Run(ctx context.Context, input string) error {
 	r.inputs = append(r.inputs, input)
 	if source, ok := agent.MemoryCompilerSourceInputFromContext(ctx); ok {
@@ -417,13 +452,13 @@ func TestTurnOrchestratorSyntheticTurnDoesNotCreateCheckpoint(t *testing.T) {
 	}
 }
 
-func TestTurnOrchestratorStopHookCancelledContext(t *testing.T) {
+func TestTurnOrchestratorStopFailureHookCancelledContext(t *testing.T) {
 	prov := &scriptedTurns{turns: [][]provider.Chunk{textTurn("done")}}
 	ag := agent.New(prov, tool.NewRegistry(), agent.NewSession(""), agent.Options{}, event.Discard)
 	var stopCalls int
 	hooks := hook.NewRunner([]hook.ResolvedHook{{
 		HookConfig: hook.HookConfig{Command: "stop"},
-		Event:      hook.Stop,
+		Event:      hook.StopFailure,
 		Scope:      hook.ScopeProject,
 	}}, "", func(ctx context.Context, in hook.SpawnInput) hook.SpawnResult {
 		if ctx.Err() != nil {
@@ -431,7 +466,10 @@ func TestTurnOrchestratorStopHookCancelledContext(t *testing.T) {
 		}
 		var p hook.Payload
 		json.Unmarshal([]byte(in.Stdin), &p)
-		if p.Event == hook.Stop {
+		if p.Event == hook.StopFailure {
+			if p.Error == "" || !p.IsInterrupt {
+				t.Errorf("failure payload = %+v", p)
+			}
 			stopCalls++
 		}
 		return hook.SpawnResult{ExitCode: 0}
@@ -444,7 +482,7 @@ func TestTurnOrchestratorStopHookCancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stopCalls != 1 {
-		t.Fatalf("Stop hooks called = %d; want 1", stopCalls)
+		t.Fatalf("StopFailure hooks called = %d; want 1", stopCalls)
 	}
 }
 
@@ -512,6 +550,46 @@ func TestTurnOrchestratorCancelPreservesVisibleUserPrompt(t *testing.T) {
 	// cancelled turn must not survive the strip.
 	if todos := c.Todos(); len(todos) != 0 {
 		t.Fatalf("Todos() after cancel = %v, want empty — cancelled todo_write leaked into canonical state", todos)
+	}
+}
+
+// TestTurnOrchestratorCancelKeepsCompletedToolRounds verifies that cancellation
+// drops only the in-progress tail. A tool-call round that finished before the
+// cancellation boundary remains in the transcript, so a follow-up can build on
+// its real, paired tool result instead of redoing completed work.
+func TestTurnOrchestratorCancelKeepsCompletedToolRounds(t *testing.T) {
+	sess := agent.NewSession("you are a helpful agent")
+	preCount := len(sess.Messages)
+	runner := &cancelStrippingRunner{
+		session: sess,
+		add: []provider.Message{
+			{Role: provider.RoleAssistant, Content: "reading config", ToolCalls: []provider.ToolCall{{ID: "c1", Name: "read_file", Arguments: `{"path":"reasonix.toml"}`}}},
+			{Role: provider.RoleTool, Content: "default_model = \"deepseek\"", ToolCallID: "c1", Name: "read_file"},
+			{Role: provider.RoleAssistant, Content: "starting the next step"},
+		},
+		boundaryAfter: 2,
+		err:           context.Canceled,
+	}
+	ex := agent.New(nil, nil, sess, agent.Options{}, event.Discard)
+	c := New(Options{Runner: runner, Executor: ex})
+	c.mu.Lock()
+	c.canceling = true
+	c.mu.Unlock()
+
+	o := newTurnOrchestrator(c)
+	if err := o.runTurnWithRawDisplay(context.Background(), "inspect config", "inspect config", ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	msgs := sess.Snapshot()
+	if len(msgs) != preCount+3 { // visible user prompt + completed assistant/tool pair
+		t.Fatalf("session messages after cancel = %d, want %d: %+v", len(msgs), preCount+3, msgs)
+	}
+	if got := msgs[preCount:]; got[0].Role != provider.RoleUser || got[1].Role != provider.RoleAssistant || got[2].Role != provider.RoleTool {
+		t.Fatalf("preserved cancelled-turn messages = %+v, want user + completed assistant/tool pair", got)
+	}
+	if got := msgs[len(msgs)-1]; got.Content != "default_model = \"deepseek\"" {
+		t.Fatalf("last preserved message = %+v, want completed tool result", got)
 	}
 }
 
@@ -679,15 +757,21 @@ func TestResumeClearsStaleSyntheticInFlightTurn(t *testing.T) {
 // cancelStrippingRunner adds messages to a session then returns a fixed error,
 // simulating an agent that was interrupted mid-turn.
 type cancelStrippingRunner struct {
-	session *agent.Session
-	add     []provider.Message
-	err     error
+	session       *agent.Session
+	add           []provider.Message
+	boundaryAfter int // 1-based add index at which a completed tool round is safe
+	err           error
 }
 
 func (r *cancelStrippingRunner) Run(ctx context.Context, input string) error {
 	r.session.Add(provider.Message{Role: provider.RoleUser, Content: input})
-	for _, m := range r.add {
+	for i, m := range r.add {
 		r.session.Add(m)
+		if r.boundaryAfter == i+1 {
+			if fn, _ := ctx.Value(agent.StepBoundaryKey{}).(func(int)); fn != nil {
+				fn(r.session.Len())
+			}
+		}
 	}
 	return r.err
 }

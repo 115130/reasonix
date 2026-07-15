@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,14 +16,16 @@ import (
 // scriptedProvider replays a distinct chunk set per Stream call, so a multi-turn
 // Run() sees tool calls on turn 1 and a plain final answer on turn 2.
 type scriptedProvider struct {
-	name  string
-	turns [][]provider.Chunk
-	call  int
+	name     string
+	turns    [][]provider.Chunk
+	call     int
+	requests []provider.Request
 }
 
 func (s *scriptedProvider) Name() string { return s.name }
 
-func (s *scriptedProvider) Stream(_ context.Context, _ provider.Request) (<-chan provider.Chunk, error) {
+func (s *scriptedProvider) Stream(_ context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	s.requests = append(s.requests, req)
 	i := s.call
 	if i >= len(s.turns) {
 		i = len(s.turns) - 1
@@ -120,6 +123,146 @@ func TestEvidenceFlowEndToEnd(t *testing.T) {
 
 	if got := toolResult(a.session, "complete_step"); !strings.Contains(got, "host-verified 1") {
 		t.Fatalf("complete_step result = %q, want it host-verified from the bash receipt", got)
+	}
+}
+
+func TestDeliveryProfileEnforcesAcceptanceReviewVerificationAndSignoff(t *testing.T) {
+	reg := evidenceRegistry()
+	reg.Add(fakeTool{name: "read_file", readOnly: true})
+
+	prov := &scriptedProvider{name: "delivery", turns: [][]provider.Chunk{
+		{toolCallChunk("blocked-write", "write_file", `{"path":"main.go","content":"package main"}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("criteria", "todo_write", `{"todos":[{"content":"Ship main","status":"in_progress","activeForm":"Shipping main"}]}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("write", "write_file", `{"path":"main.go","content":"package main"}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("review", "read_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("verify", "bash", `{"command":"go test ./..."}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("signoff", "complete_step", `{
+			"step":"Ship main",
+			"result":"main is implemented and verified",
+			"evidence":[
+				{"kind":"diff","summary":"main implementation added","paths":["main.go"]},
+				{"kind":"verification","summary":"tests pass","command":"go test ./..."}
+			]
+		}`), {Type: provider.ChunkDone}},
+		{{Type: provider.ChunkText, Text: "delivered"}, {Type: provider.ChunkDone}},
+	}}
+
+	a := New(prov, reg, NewSession(""), Options{DeliveryProfile: true}, event.Discard)
+	if err := a.Run(context.Background(), "implement main"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := toolResult(a.session, "write_file"); !strings.Contains(got, "delivery-first mode requires acceptance criteria") {
+		t.Fatalf("first write result = %q, want delivery acceptance gate", got)
+	}
+	if !sessionHasUserMessageContaining(a.session, "<delivery-runtime>") {
+		t.Fatal("delivery runtime marker was not injected into the turn tail")
+	}
+	if got := lastToolResult(a.session, "complete_step"); !strings.Contains(got, "signed off") {
+		t.Fatalf("complete_step result = %q, want successful sign-off", got)
+	}
+	firstSystem := systemMessageContent(prov.requests[0])
+	firstTools := prov.requests[0].Tools
+	for i, req := range prov.requests[1:] {
+		if got := systemMessageContent(req); got != firstSystem {
+			t.Fatalf("delivery request %d changed the cache-stable system prompt", i+2)
+		}
+		if !reflect.DeepEqual(req.Tools, firstTools) {
+			t.Fatalf("delivery request %d changed provider-visible tool schemas", i+2)
+		}
+	}
+}
+
+func systemMessageContent(req provider.Request) string {
+	for _, msg := range req.Messages {
+		if msg.Role == provider.RoleSystem {
+			return msg.Content
+		}
+	}
+	return ""
+}
+
+func TestDeliveryProfileRetriesFinalAnswerUntilReviewExists(t *testing.T) {
+	reg := evidenceRegistry()
+	reg.Add(fakeTool{name: "read_file", readOnly: true})
+	prov := &scriptedProvider{name: "delivery", turns: [][]provider.Chunk{
+		{toolCallChunk("criteria", "todo_write", `{"todos":[{"content":"Ship main","status":"in_progress"}]}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("write", "write_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("verify", "bash", `{"command":"go test ./..."}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("signoff", "complete_step", `{"step":"Ship main","result":"implemented","evidence":[{"kind":"verification","summary":"tests pass","command":"go test ./..."}]}`), {Type: provider.ChunkDone}},
+		{{Type: provider.ChunkText, Text: "done too early"}, {Type: provider.ChunkDone}},
+		{toolCallChunk("review", "read_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
+		{{Type: provider.ChunkText, Text: "done before renewed signoff"}, {Type: provider.ChunkDone}},
+		{toolCallChunk("renewed-signoff", "complete_step", `{"step":"Ship main","result":"implemented, reviewed, and verified","evidence":[{"kind":"verification","summary":"tests pass","command":"go test ./..."}]}`), {Type: provider.ChunkDone}},
+		{{Type: provider.ChunkText, Text: "done after review and signoff"}, {Type: provider.ChunkDone}},
+	}}
+	sink := &readinessAuditSink{}
+	a := New(prov, reg, NewSession(""), Options{DeliveryProfile: true}, sink)
+	if err := a.Run(context.Background(), "implement main"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if prov.call != 9 {
+		t.Fatalf("provider calls = %d, want review followed by renewed sign-off", prov.call)
+	}
+	if !sessionHasUserMessageContaining(a.session, "inspect the changed result") {
+		t.Fatal("missing host retry explaining the delivery review requirement")
+	}
+	if len(sink.events) < 3 || sink.events[0].MissingReview != 1 || sink.events[1].MissingVerification != 1 || sink.events[len(sink.events)-1].Result != evidence.ReadinessAllowed {
+		t.Fatalf("readiness audits = %+v, want review block, renewed-signoff block, then allowed", sink.events)
+	}
+}
+
+func TestDeliveryProfileRejectsTextOnlyImplementationClaim(t *testing.T) {
+	reg := evidenceRegistry()
+	reg.Add(fakeTool{name: "read_file", readOnly: true})
+	prov := &scriptedProvider{name: "delivery", turns: [][]provider.Chunk{
+		{{Type: provider.ChunkText, Text: "implemented"}, {Type: provider.ChunkDone}},
+		{toolCallChunk("criteria", "todo_write", `{"todos":[{"content":"Implement main","status":"in_progress"}]}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("write", "write_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("review", "read_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("verify", "bash", `{"command":"go test ./..."}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("signoff", "complete_step", `{"step":"Implement main","result":"implemented","evidence":[{"kind":"verification","summary":"tests pass","command":"go test ./..."}]}`), {Type: provider.ChunkDone}},
+		{{Type: provider.ChunkText, Text: "implemented with evidence"}, {Type: provider.ChunkDone}},
+	}}
+	a := New(prov, reg, NewSession(""), Options{DeliveryProfile: true}, event.Discard)
+	if err := a.Run(context.Background(), "implement main"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !sessionHasUserMessageContaining(a.session, "no successful mutation was observed") {
+		t.Fatal("text-only implementation claim was not rejected by the delivery gate")
+	}
+}
+
+func TestDeliveryProfileCommandOnlyActionRequiresCriteriaAndSignoff(t *testing.T) {
+	reg := evidenceRegistry()
+	prov := &scriptedProvider{name: "delivery", turns: [][]provider.Chunk{
+		{toolCallChunk("blocked-test", "bash", `{"command":"go test ./..."}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("criteria", "todo_write", `{"todos":[{"content":"Run tests","status":"in_progress"}]}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("verify", "bash", `{"command":"go test ./..."}`), {Type: provider.ChunkDone}},
+		{toolCallChunk("signoff", "complete_step", `{"step":"Run tests","result":"tests pass","evidence":[{"kind":"verification","summary":"tests pass","command":"go test ./..."}]}`), {Type: provider.ChunkDone}},
+		{{Type: provider.ChunkText, Text: "tests pass"}, {Type: provider.ChunkDone}},
+	}}
+	a := New(prov, reg, NewSession(""), Options{DeliveryProfile: true}, event.Discard)
+	if err := a.Run(context.Background(), "run tests"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := toolResult(a.session, "bash"); !strings.Contains(got, "delivery-first mode requires acceptance criteria") {
+		t.Fatalf("first bash result = %q, want acceptance gate", got)
+	}
+	if got := lastToolResult(a.session, "complete_step"); !strings.Contains(got, "signed off") {
+		t.Fatalf("complete_step result = %q, want successful command-only sign-off", got)
+	}
+}
+
+func TestDeliveryProfileAllowsEvidenceBackedReadOnlyAnalysis(t *testing.T) {
+	reg := tool.NewRegistry()
+	reg.Add(fakeTool{name: "read_file", readOnly: true})
+	prov := &scriptedProvider{name: "delivery", turns: [][]provider.Chunk{
+		{toolCallChunk("read", "read_file", `{"path":"main.go"}`), {Type: provider.ChunkDone}},
+		{{Type: provider.ChunkText, Text: "analysis"}, {Type: provider.ChunkDone}},
+	}}
+	a := New(prov, reg, NewSession(""), Options{DeliveryProfile: true}, event.Discard)
+	if err := a.Run(context.Background(), "analyze main.go"); err != nil {
+		t.Fatalf("read-only analysis should not require mutation/sign-off: %v", err)
 	}
 }
 
@@ -854,10 +997,14 @@ func TestEvidenceFlowRecoversAfterBatchTodoCompletionRejection(t *testing.T) {
 				"result":"build and tests ran",
 				"evidence":[{"kind":"manual","summary":"checked manually"}]
 			}`),
-			toolCallChunk("c5", "todo_write", `{"todos":[
-				{"content":"Port entity imports","status":"completed"},
-				{"content":"Run build and tests","status":"completed"}
-			]}`),
+			{Type: provider.ChunkDone},
+		},
+		{
+			toolCallChunk("c5", "complete_step", `{
+				"step":"Run build and tests",
+				"result":"build and tests ran",
+				"evidence":[{"kind":"manual","summary":"checked manually"}]
+			}`),
 			{Type: provider.ChunkDone},
 		},
 		{{Type: provider.ChunkText, Text: "done"}, {Type: provider.ChunkDone}},
@@ -869,14 +1016,19 @@ func TestEvidenceFlowRecoversAfterBatchTodoCompletionRejection(t *testing.T) {
 	}
 
 	stepResults := toolResults(a.session, "complete_step")
-	if len(stepResults) < 2 {
-		t.Fatalf("complete_step results = %v, want two sign-offs", stepResults)
+	if len(stepResults) < 3 {
+		t.Fatalf("complete_step results = %v, want blocked batch sign-off and a retry", stepResults)
 	}
-	if got := stepResults[1]; !strings.Contains(got, "signed off") {
-		t.Fatalf("pending todo complete_step result = %q, want successful sign-off", got)
+	if got := stepResults[1]; !strings.Contains(got, "only one successful complete_step") {
+		t.Fatalf("second batched complete_step result = %q, want serial-signoff block", got)
 	}
-	if got := lastToolResult(a.session, "todo_write"); !strings.Contains(got, "2 completed") {
-		t.Fatalf("final todo_write result = %q, want all todos completed", got)
+	if got := stepResults[2]; !strings.Contains(got, "signed off") {
+		t.Fatalf("next-round complete_step result = %q, want successful sign-off", got)
+	}
+	for i, todo := range a.CanonicalTodoState() {
+		if todo.Status != "completed" {
+			t.Fatalf("canonical todo %d = %+v, want completed", i+1, todo)
+		}
 	}
 }
 
@@ -971,7 +1123,7 @@ func TestEvidenceFlowRejectsReplacedTodoAfterNumericCompleteStep(t *testing.T) {
 	}
 }
 
-func TestEvidenceFlowAcceptsReorderedTodoAfterNumericCompleteStep(t *testing.T) {
+func TestEvidenceFlowRejectsReorderedTodoAndRecoversSerially(t *testing.T) {
 	todoWrite, ok := tool.LookupBuiltin("todo_write")
 	if !ok {
 		t.Fatal("todo_write builtin not registered")
@@ -999,19 +1151,14 @@ func TestEvidenceFlowAcceptsReorderedTodoAfterNumericCompleteStep(t *testing.T) 
 				{"content":"Write tests","status":"pending"},
 				{"content":"Add parser","status":"completed"}
 			]}`),
-			toolCallChunk("c4", "todo_write", `{"todos":[
-				{"content":"Write tests","status":"in_progress"},
-				{"content":"Add parser","status":"completed"}
-			]}`),
-			toolCallChunk("c5", "complete_step", `{
+			{Type: provider.ChunkDone},
+		},
+		{
+			toolCallChunk("c4", "complete_step", `{
 				"step":"Write tests",
 				"result":"tests written",
 				"evidence":[{"kind":"manual","summary":"checked manually"}]
 			}`),
-			toolCallChunk("c6", "todo_write", `{"todos":[
-				{"content":"Write tests","status":"completed"},
-				{"content":"Add parser","status":"completed"}
-			]}`),
 			{Type: provider.ChunkDone},
 		},
 		{{Type: provider.ChunkText, Text: "done"}, {Type: provider.ChunkDone}},
@@ -1022,7 +1169,13 @@ func TestEvidenceFlowAcceptsReorderedTodoAfterNumericCompleteStep(t *testing.T) 
 		t.Fatalf("Run: %v", err)
 	}
 
-	if got := lastToolResult(a.session, "todo_write"); !strings.Contains(got, "Todos updated") {
-		t.Fatalf("final todo_write result = %q, want reordered signed todo accepted", got)
+	results := toolResults(a.session, "todo_write")
+	if len(results) != 2 || !strings.Contains(results[1], "completed after unfinished") {
+		t.Fatalf("reordered todo_write results = %v, want serial-order rejection", results)
+	}
+	for i, todo := range a.CanonicalTodoState() {
+		if todo.Status != "completed" {
+			t.Fatalf("canonical todo %d = %+v, want completed after serial recovery", i+1, todo)
+		}
 	}
 }

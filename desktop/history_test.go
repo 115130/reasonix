@@ -20,7 +20,7 @@ import (
 func TestHistoryMessagesIncludeAssistantReasoning(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: provider.RoleUser, Content: "expanded prompt"},
-		{Role: provider.RoleAssistant, Content: "answer", ReasoningContent: "thinking trace", ToolCalls: []provider.ToolCall{{
+		{Role: provider.RoleAssistant, Content: "answer", ReasoningContent: "thinking trace", WorkDurationMs: 24_000, ToolCalls: []provider.ToolCall{{
 			ID: "call_1", Name: "bash", Arguments: `{"command":"pwd"}`,
 		}}, MemoryCitations: []provider.MemoryCitation{{
 			ID: "mem-1", Source: "Memory v5", Note: "use previous bash failure", Kind: "constraint",
@@ -47,6 +47,9 @@ func TestHistoryMessagesIncludeAssistantReasoning(t *testing.T) {
 	}
 	if got[1].Reasoning != "thinking trace" {
 		t.Fatalf("assistant reasoning = %q, want thinking trace", got[1].Reasoning)
+	}
+	if got[1].WorkDurationMs != 24_000 {
+		t.Fatalf("assistant work duration = %d, want 24000", got[1].WorkDurationMs)
 	}
 	if len(got[1].MemoryCitations) != 1 || got[1].MemoryCitations[0].Note != "use previous bash failure" {
 		t.Fatalf("assistant memory citations not preserved: %+v", got[1].MemoryCitations)
@@ -86,6 +89,21 @@ func TestHistoryMessagesDoNotReplayMemoryCompilerContract(t *testing.T) {
 		t.Fatalf("raw Memory v5 contract should not be replay submitText, got %q", got[0].SubmitText)
 	}
 	assertNoHistoryMemoryContract(t, got[0].Content)
+}
+
+func TestHistoryMessagesRestoreCompiledSkillInvocationWithoutContract(t *testing.T) {
+	raw := historyMemoryCompilerContract(t, "/reasonix-develop ship the refactor")
+	msgs := []provider.Message{{Role: provider.RoleUser, Content: raw}}
+
+	got := historyMessages(msgs, func(string) string { return "ship the refactor" })
+	if len(got) != 1 {
+		t.Fatalf("history length = %d, want 1: %+v", len(got), got)
+	}
+	if got[0].Content != "ship the refactor" || got[0].SubmitText != "/reasonix-develop ship the refactor" {
+		t.Fatalf("compiled skill history = %+v", got[0])
+	}
+	assertNoHistoryMemoryContract(t, got[0].Content)
+	assertNoHistoryMemoryContract(t, got[0].SubmitText)
 }
 
 func TestHistoryMessagesStripActiveGoalFromVisibleUserContent(t *testing.T) {
@@ -1072,6 +1090,26 @@ func TestLoadTabSessionProfileIgnoresTerminalGoalState(t *testing.T) {
 	if profile.tokenMode != boot.TokenModeEconomy || profile.mode != "plan" || profile.toolApprovalMode != control.ToolApprovalAuto {
 		t.Fatalf("loaded profile = token:%q mode:%q approval:%q, want economy/plan/auto",
 			profile.tokenMode, profile.mode, profile.toolApprovalMode)
+	}
+}
+
+func TestLoadTabSessionProfileMissingApprovalDefaultsAsk(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	root := globalTabWorkspaceRoot()
+	dir := desktopSessionDir(root)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+
+	sessionPath := filepath.Join(dir, "legacy-missing-approval.jsonl")
+	writeHistoryTestSession(t, sessionPath, "legacy prompt")
+	if err := agent.SaveBranchMetaPreserveUpdated(sessionPath, agent.BranchMeta{Mode: "normal"}); err != nil {
+		t.Fatalf("SaveBranchMetaPreserveUpdated: %v", err)
+	}
+
+	profile := loadTabSessionProfile(sessionPath)
+	if profile.toolApprovalMode != control.ToolApprovalAsk {
+		t.Fatalf("legacy missing tool approval mode = %q, want ask", profile.toolApprovalMode)
 	}
 }
 

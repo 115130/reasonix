@@ -173,8 +173,8 @@ prefix cache-stable:
 - The **planner** (low-frequency) runs in its own session with the same standing
   memory context plus a filtered read-only research tool set, then produces a
   concise plan. It can inspect files/docs before planning, but writer and
-  workflow tools are not exposed to it. `agent.planner_max_steps` bounds this
-  read-only exploration independently from the executor's `agent.max_steps`.
+  workflow tools are not exposed to it. It has no user-configured total-round
+  cap; caller cancellation and context safeguards remain available.
 - The plan is handed off as structured text to the **executor** — a full
   tool-using `Agent` in its own session — which carries it out.
 - The sessions never mix, so neither model's prefix is disturbed by the other's
@@ -474,6 +474,39 @@ resolved and prepended to the message as a tagged block the model can read.
   bottom-region menu changes height only on these discrete actions, never per
   streamed token, so scrollback stays clean (§ rendering).
 
+### 3.10 Subagent profiles and explicit CLI execution
+
+A subagent profile is a Skill with `runAs: subagent` and, for profiles managed
+by the desktop or CLI editors, `invocation: manual`. Profiles reuse the existing
+project/global Skill files; they do not introduce another state format or
+database. Manual invocation excludes a profile from the pinned Skill index so
+the model cannot discover it implicitly, while explicit `/<name> <task>`
+invocation remains available.
+
+Interactive slash invocation and `Controller.RunSubagentProfile` both execute
+the profile with the Boot-wired Skill runners. Each run gets an isolated child
+session and returns only its final answer to the caller. The headless contract is
+explicit:
+
+- `reasonix subagent try <name> ... <task>` uses the read-only Skill runner;
+- `reasonix subagent run <name> ... <task>` uses the normal permission and
+  sandbox path; and
+- ordinary `Controller.Run` / `reasonix run` remains unchanged and does not
+  reinterpret slash-prefixed input as a subagent command.
+
+Desktop and CLI profile mutations share
+`skill.ValidateEditableSubagentProfile`. Only simple manual project/global
+profiles can be rewritten or deleted. Custom-scope Skills, unmanaged
+frontmatter, and Skill directories containing `references/` or `scripts/` are
+refused so an editor cannot silently flatten or discard rich Skill content.
+Built-in profiles support configuration overrides but have no writable file.
+
+Effective model and effort precedence is: per-profile
+`agent.subagent_models` / `agent.subagent_efforts`, profile frontmatter,
+`agent.subagent_model` / `agent.subagent_effort`, then executor/default model
+configuration. See [Subagent profiles](./SUBAGENT_PROFILES.md) for the user-facing
+command and file-format contract.
+
 ## 4. Data Types (`internal/provider`)
 
 ```go
@@ -511,18 +544,14 @@ Resolution order: **flag > project `./reasonix.toml` > the user config file
 at `~/.reasonix/config.toml` on macOS/Linux and
 `%AppData%\reasonix\config.toml` on Windows. See
 [Configuration paths](./CONFIG_PATHS.md) for migration and related data paths.
-Fields marked user/global only, including agent step limits, are not overridden
-by project `reasonix.toml`.
+Fields marked user/global only are not overridden by project `reasonix.toml`.
 Provider entries name secrets with `api_key_env`; saved key values live in
 Reasonix's global `<Reasonix home>/.env`, shared by CLI and desktop. Project
 `.env`, home `.env`, inherited shell environment variables, legacy credentials,
 and the OS keyring are not provider-key runtime fallbacks. Project `.env` still
 feeds workspace-scoped, non-provider `${VAR}` expansion for MCP/plugin settings
-without importing provider keys or Reasonix control variables. Step-limit
-preferences belong in the user config.
-Project `reasonix.toml` does not override `agent.max_steps` or
-`agent.planner_max_steps`, and it does not override the user-level Memory v5
-compiler switch.
+without importing provider keys or Reasonix control variables. Project
+`reasonix.toml` does not override the user-level Memory v5 compiler switch.
 
 ```toml
 default_model = "deepseek"   # provider name (→ its default model) or "provider/model"
@@ -534,8 +563,6 @@ default_model = "deepseek"   # provider name (→ its default model) or "provide
 
 [agent]
 system_prompt = "You are Reasonix, a coding agent..."  # or system_prompt_file = "..."
-max_steps         = 0    # user/global only; executor tool-call rounds; 0 = no limit
-planner_max_steps = 0    # user/global only; planner read-only tool-call rounds; 0 = no limit
 temperature       = 0.0
 memory_compiler = { enabled = true, verbosity = "observe" }   # user/global only; observe|compact; CLI: reasonix config memory-v5 off|observe|compact|on|status
 reasoning_language = "auto"       # visible reasoning text: auto|zh|en
@@ -544,7 +571,9 @@ reasoning_language = "auto"       # visible reasoning text: auto|zh|en
 # plan_mode_read_only_commands = ["gh issue view", "gh pr diff"]   # extra read-only shell prefixes for plan mode
 # planner_model = "deepseek-pro"   # optional: two-model collaboration (low-frequency planner)
 # subagent_model = "deepseek-pro"   # optional default for runAs=subagent skills
+# subagent_effort = "high"           # optional default reasoning effort for subagents
 # subagent_models = { review = "deepseek-pro", security_review = "deepseek-pro" }
+# subagent_efforts = { review = "max", security_review = "high" }
 
 # A vendor endpoint exposing several models under one base_url/key.
 [[providers]]
@@ -615,6 +644,20 @@ args    = []
 # headers = { Authorization = "Bearer ${STRIPE_KEY}" }   # ${VAR} / ${VAR:-default} expanded
 ```
 
+The executor tracks an adaptive progress lease while a todo is active. A new
+completion, unique successful read, command, or mutation renews the lease;
+exact repeats do not. After 8 no-progress tool-call rounds the host appends a
+one-shot reassessment nudge. After 16 it pauses and preserves work for a later
+user turn. The serial contract is level-aware while preserving the
+single-in_progress rule: in a two-level list the active level-1 sub-step is
+the only `in_progress` item and its level-0 phase stays `pending`; sub-steps
+complete in order, and the phase becomes `in_progress` — and signs off — only
+after all of its sub-steps have completed. A level-1 item with no phase above
+it is rejected. Retired `[agent].max_steps` and `planner_max_steps` keys remain
+parseable for upgrade compatibility, but are ignored and removed by a one-time
+migration. The CLI `--max-steps` flag and `[bot].max_steps` remain separate,
+explicit controls for one-off and unattended execution.
+
 `reasonix setup` writes this default config so the CLI is usable out of the box.
 
 `[ui].cursor_shape` is normalized to `underline`, `block`, or `bar`; empty or
@@ -655,30 +698,17 @@ update its own global config. `forbid_read` lists directories the agent should
 not read, list, or search; entries support `${VAR}` / `${VAR:-default}` expansion
 and should be absolute, or use `${HOME}` for home-relative secrets such as
 `${HOME}/.ssh`. `bash` is itself jailed by default when an OS sandbox is
-available (`[sandbox] bash = "enforce"`: Seatbelt on macOS, bubblewrap on
-Linux, and a native helper on Windows): each command is allowed to write only
+available (`[sandbox] bash = "enforce"`: Seatbelt on macOS and bubblewrap on
+Linux): each command is allowed to write only
 the same roots plus platform-specific command temp/cache roots, denied reads
 under `forbid_read`, and allowed to reach the network only when
 `network = true`.
-The native Windows helper uses Reasonix's bundled Windows sandbox backend:
-AppContainer for read-only commands and a low-integrity token for writable
-commands, with temporary ACL grants for
-writable roots and tool executables, a per-command temp root instead of mutating
-the global Temp directory, temporary deny ACEs for `forbid_read` (files and
-directories), best-effort restoration from pre-run DACL snapshots for touched
-directories, and a kill-on-close Job Object. Because the sandbox works by
-temporarily mutating shared-path ACLs and integrity labels, concurrent commands
-against the same root are serialized with a per-root lock, and residue from a
-force-killed command (a lingering low-integrity label or `forbid_read` deny ACE)
-is swept by the next run so a crash cannot durably lower a workspace's integrity
-or lock the user out of a `forbid_read` path. A writable command runs under a
-low-integrity token, so beyond the configured roots it retains write access to
-the narrow set of locations Windows leaves writable to any low-integrity process
-(e.g. `AppData\LocalLow`); the workspace boundary and `forbid_read` denials are
-unaffected. Read-only AppContainer commands omit network capabilities when
-networking is disabled; writable Windows commands fail closed when
-`network = false` because the low-integrity token does not provide a reliable
-per-process network block without elevated firewall/WFP setup.
+**Windows status:** Reasonix does not ship an OS-level Bash sandbox on Windows.
+The effective mode is fixed to `off`; an older config containing
+`bash = "enforce"` remains readable but resolves to `off`, `reasonix doctor`
+reports the ignored value, and the desktop control is read-only. Bash therefore
+runs unconfined on Windows. The in-process file tools continue to enforce
+`workspace_root`, `allow_write`, and `forbid_read`.
 When no OS sandbox is available, `bash = "enforce"` refuses bash execution
 instead of running unconfined. Install the platform sandbox backend
 (bubblewrap/`bwrap` on Linux, `sandbox-exec` on macOS) or set
@@ -711,16 +741,12 @@ behavior. The escape-prompt and broader OS support are Phase 1's remainder (§9)
 
 - Sandbox Phase 1: an OS-level jail for `bash` so commands — not just the
   file-writer built-ins (Phase 0) — are confined to the workspace. **Seatbelt on
-  macOS, bubblewrap on Linux, and a native Windows helper ship, on by default
-  when available** (see §5).
-  Remaining: (a)
-  the escape-prompt — detect sandbox-unavailable or sandbox-denied failures and
+  macOS and bubblewrap on Linux ship, on by default when available** (see §5).
+  Remaining: the escape-prompt — detect sandbox-unavailable or sandbox-denied failures and
   offer an explicit, permission-gated unconfined rerun (in `reasonix run`, the
   command just fails and the model adapts), which completes the "allow inside the
-  box, prompt at its edge" model; (b) an optional elevated Windows backend with a
-  dedicated sandbox user for enterprise hardening. Shells out to OS tooling so
-  the binary stays dependency-free. With this in
-  place, "always allow" rule persistence becomes optional rather than load-bearing.
+  box, prompt at its edge" model. With this in place, "always allow" rule
+  persistence becomes optional rather than load-bearing.
 - MCP long tail (deferred deliberately — no consumer / no foundation yet): OAuth
   2.0 + `headersHelper` auth for remote servers; the remaining `.mcp.json` scopes
   (local / user — project scope shipped, see §5); tool-search deferral;

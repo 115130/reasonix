@@ -1,16 +1,42 @@
 import { JSDOM } from "jsdom";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MCPServersSettingsPage, PluginsSettingsPage } from "../components/CapabilitiesPanel";
+import { slashCommandGroup, slashCommandKindTag, sortSlashCommandsForMenu } from "../components/SlashMenu";
+import { selectToolsOnFirstCustomUse } from "../components/SubagentsPanel";
 import type { AppBindings } from "../lib/bridge";
-import { LocaleProvider } from "../lib/i18n";
+import { LocaleProvider, t } from "../lib/i18n";
 import { mcpServerLifecycleActions, mcpServerRetryableFromAvailableList } from "../lib/mcpServerLifecycle";
 import type { Meta, PluginInstallOptions, PluginView, ServerView, TabMeta } from "../lib/types";
 
 function ok(value: unknown, message: string) {
   if (!value) throw new Error(message);
 }
+
+const subagentTools = [
+  { name: "read_file", description: "Read files" },
+  { name: "edit_file", description: "Edit files" },
+  { name: "bash", description: "Run commands" },
+];
+const firstCustomSelection = selectToolsOnFirstCustomUse(new Set(), subagentTools, false);
+ok(firstCustomSelection.size === subagentTools.length, "first custom-mode use should select every available tool");
+const savedCustomSelection = selectToolsOnFirstCustomUse(new Set(["read_file", "edit_file"]), subagentTools, true);
+ok(savedCustomSelection.size === 2 && !savedCustomSelection.has("bash"), "saved custom tool selections should be preserved");
+ok(selectToolsOnFirstCustomUse(new Set(), subagentTools, true).size === 0, "returning to custom mode should preserve a deliberate empty selection");
+
+const subagentsSource = readFileSync(new URL("../components/SubagentsPanel.tsx", import.meta.url), "utf8");
+const subagentsStyles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+const customGroupIndex = subagentsSource.indexOf('aria-labelledby="subagents-custom-title"');
+const builtinGroupIndex = subagentsSource.indexOf('aria-labelledby="subagents-builtin-title"');
+ok(customGroupIndex >= 0 && builtinGroupIndex > customGroupIndex, "custom subagents should render before built-in subagents");
+ok((subagentsSource.match(/className="subagents-profile-group"/g) ?? []).length === 2, "custom and built-in subagents should use separate sections");
+ok(subagentsSource.includes('className="btn btn--small subagents-reset-override"'), "override status and reset should share one compact action");
+ok(subagentsStyles.includes("repeat(2, minmax(200px, 1fr)) 152px"), "built-in subagent pickers should use equal columns and reserve one stable status column");
+ok(subagentsSource.includes('className="settings-model-picker subagents-effort-picker"'), "effort and model overrides should share the same picker interaction pattern");
+ok(subagentsSource.includes("<SubagentInvocation name={skill.name}"), "every subagent card should show its chat invocation affordance");
+ok(subagentsSource.includes("onUseInChat(command)"), "subagent cards should send their slash command to the chat composer");
 
 function server(status: ServerView["status"]): ServerView {
   return {
@@ -117,6 +143,32 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new eventCtor("change", { bubbles: true }));
 }
 
+ok(
+  slashCommandKindTag({ name: "pwf:plan", description: "Plugin planning prompt.", kind: "custom", plugin: "pwf" }, t) === "plugin · pwf",
+  "slash menu identifies the canonical plugin command source",
+);
+ok(
+  slashCommandGroup({ name: "explore", description: "Explore in isolation.", kind: "subagent" }) === "subagents",
+  "slash menu groups isolated skills as subagents",
+);
+ok(
+  slashCommandGroup({ name: "plugins", description: "Manage plugins.", kind: "builtin", group: "management" }) === "management",
+  "slash menu honors backend-provided command groups",
+);
+ok(
+  slashCommandGroup({ name: "plugins", description: "Manage plugins.", kind: "builtin" }) === "management"
+    && slashCommandGroup({ name: "new", description: "New session.", kind: "builtin" }) === "actions",
+  "slash menu keeps a safe grouping fallback for older backends",
+);
+ok(
+  sortSlashCommandsForMenu([
+    { name: "plugins", description: "Manage plugins.", kind: "builtin", group: "management" },
+    { name: "explore", description: "Explore in isolation.", kind: "subagent", group: "subagents" },
+    { name: "new", description: "New session.", kind: "builtin", group: "actions" },
+  ]).map((command) => command.name).join(",") === "new,explore,plugins",
+  "slash menu keyboard order follows the visible group order",
+);
+
 console.log("capabilities panel MCP actions");
 
 {
@@ -155,6 +207,7 @@ console.log("capabilities panel MCP actions");
     toolList: [
       { name: "issue_read", description: "Read issues.", readOnlyHint: true },
       { name: "issue_write", description: "Write issues." },
+      { name: "broken_read", description: "Broken tool.", readOnlyHint: true, schemaError: "invalid input schema: bad nested type" },
     ],
     trustedReadOnlyTools: [],
   }];
@@ -217,6 +270,9 @@ console.log("capabilities panel MCP actions");
   });
 
   await waitFor("trusted badge", () => Boolean(document.querySelector(".cap-tool-trust")?.textContent?.includes("Trusted")));
+  await waitFor("unavailable tool", () => Boolean(document.querySelector(".cap-tool-hint--error")?.textContent?.includes("Unavailable")));
+  ok(document.body.textContent?.includes("1 unavailable"), "server summary reports one quarantined tool");
+  ok(document.body.textContent?.includes("invalid input schema: bad nested type"), "tool list shows the schema diagnostic");
   const untrust = findButton("Untrust");
   if (!untrust) throw new Error("missing Untrust button");
   await act(async () => {
@@ -238,6 +294,143 @@ console.log("capabilities panel MCP actions");
   ok(untrustCalls === 1, "clicking Untrust invokes the MCP untrust action once");
   ok(trustCalls === 1, "clicking Trust invokes the MCP trust action once");
   ok(servers[0]?.trustedReadOnlyTools?.includes("issue_read") ?? false, "trusted raw tool name is added to the server snapshot");
+
+  await act(async () => {
+    root.unmount();
+  });
+  dom.window.close();
+}
+
+{
+  const dom = installDom();
+  const rootEl = document.getElementById("root");
+  if (!rootEl) throw new Error("missing root");
+  const root = createRoot(rootEl);
+  const meta: Meta = { label: "test", ready: true, eventChannel: "managed-mcp-channel", cwd: "/tmp/reasonix-test", workspaceRoot: "/tmp/reasonix-test" };
+  const tabs: TabMeta[] = [{
+    id: "tab-managed-mcp",
+    scope: "project",
+    workspaceRoot: "/tmp/reasonix-test",
+    workspaceName: "reasonix-test",
+    topicId: "topic-managed-mcp",
+    topicTitle: "Managed MCP",
+    label: "Managed MCP",
+    ready: true,
+    running: false,
+    mode: "normal",
+    toolApprovalMode: "auto",
+    active: true,
+    cwd: "/tmp/reasonix-test",
+  }];
+  const servers: ServerView[] = [{
+    name: "helper",
+    transport: "http",
+    status: "connected",
+    configured: true,
+    managedByPlugin: "superpowers",
+    authConfigured: true,
+    autoStart: true,
+    tools: 1,
+    prompts: 0,
+    resources: 0,
+    toolList: [{ name: "echo", description: "Echo input", readOnlyHint: true }],
+  }];
+  window.go = {
+    main: {
+      App: {
+        Meta: async () => meta,
+        ListTabs: async () => tabs,
+        MCPServers: async () => servers,
+      } as Partial<AppBindings> as AppBindings,
+    },
+  };
+
+  await act(async () => {
+    root.render(React.createElement(LocaleProvider, null, React.createElement(MCPServersSettingsPage)));
+    await flush();
+  });
+  await waitFor("plugin-managed MCP row", () => Boolean(document.querySelector(".cap-row__name")?.textContent?.includes("helper")));
+  ok(document.body.textContent?.includes("Managed by plugin superpowers") ?? false, "plugin-managed MCP identifies its owner");
+
+  const disclosure = document.querySelector<HTMLButtonElement>(".cap-disclosure");
+  if (!disclosure) throw new Error("missing plugin-managed MCP disclosure");
+  await act(async () => {
+    disclosure.click();
+    await flush();
+  });
+  ok(!findButton("Remove server"), "plugin-managed MCP hides the misleading remove action");
+  ok(!findButton("Edit config"), "plugin-managed MCP hides direct config editing");
+  ok(!findButton("Clear auth"), "plugin-managed MCP hides auth persistence actions");
+  ok(!findButton("Pre-trust read-only (1)"), "plugin-managed MCP hides bulk trust persistence actions");
+
+  const viewTools = findButton("View tools");
+  if (!viewTools) throw new Error("missing managed MCP View tools button");
+  await act(async () => {
+    viewTools.click();
+    await flush();
+  });
+  ok(!findButton("Pre-trust"), "plugin-managed MCP hides per-tool trust persistence actions");
+
+  await act(async () => {
+    root.unmount();
+  });
+  dom.window.close();
+}
+
+{
+  const dom = installDom();
+  const rootEl = document.getElementById("root");
+  if (!rootEl) throw new Error("missing root");
+  const root = createRoot(rootEl);
+  const meta: Meta = { label: "test", ready: true, eventChannel: "runtime-mcp-channel", cwd: "/tmp/reasonix-test", workspaceRoot: "/tmp/reasonix-test" };
+  const tabs: TabMeta[] = [{
+    id: "tab-runtime-mcp",
+    scope: "project",
+    workspaceRoot: "/tmp/reasonix-test",
+    workspaceName: "reasonix-test",
+    topicId: "topic-runtime-mcp",
+    topicTitle: "Runtime MCP",
+    label: "Runtime MCP",
+    ready: true,
+    running: false,
+    mode: "normal",
+    toolApprovalMode: "auto",
+    active: true,
+    cwd: "/tmp/reasonix-test",
+  }];
+  const servers: ServerView[] = [{
+    name: "runtime-only",
+    transport: "stdio",
+    status: "failed",
+    configured: false,
+    autoStart: false,
+    tools: 0,
+    prompts: 0,
+    resources: 0,
+    error: "command not found",
+  }];
+  window.go = {
+    main: {
+      App: {
+        Meta: async () => meta,
+        ListTabs: async () => tabs,
+        MCPServers: async () => servers,
+      } as Partial<AppBindings> as AppBindings,
+    },
+  };
+
+  await act(async () => {
+    root.render(React.createElement(LocaleProvider, null, React.createElement(MCPServersSettingsPage)));
+    await flush();
+  });
+  await waitFor("runtime-only failure details", () => Boolean(findButton("View details")));
+  const showDetails = findButton("View details");
+  if (!showDetails) throw new Error("missing runtime-only failure details button");
+  await act(async () => {
+    showDetails.click();
+    await flush();
+  });
+  ok(!findButton("Remove server"), "runtime-only MCP failure hides an action the backend cannot persist");
 
   await act(async () => {
     root.unmount();
@@ -303,7 +496,11 @@ console.log("capabilities panel plugin actions");
             ok: true,
             status: "planned",
             name: "superpowers",
-            actions: [{ kind: "plugin", action: "install_plugin_package", name: "superpowers", source, status: "planned" }],
+            actions: [{
+              kind: "plugin", action: "install_plugin_package", name: "superpowers", source, status: "planned",
+              compatibility: "partial", mappedCapabilities: ["skills", "agents"],
+              skippedCapabilities: [{ capability: "hook", path: "hooks/hooks.json", reason: "unsupported event" }],
+            }],
           });
         },
         InstallPlugin: async (source: string, _options: PluginInstallOptions) => {
@@ -318,11 +515,26 @@ console.log("capabilities panel plugin actions");
             manifestKind: "reasonix",
             enabled: true,
             skills: 3,
+            commands: 2,
+            agents: 1,
             hooks: 1,
             mcpServers: 1,
-            skillDetails: [{ name: "plan", description: "Plan work before implementation.", invocation: "/plan", runAs: "inline" }],
+            compatibility: "full",
+            mappedCapabilities: ["skills", "agents", "hooks", "mcp"],
+            skillDetails: [{ name: "plan", description: "Plan work before implementation.", invocation: "/superpowers:plan", runAs: "inline" }],
+            agentDetails: [{ name: "reviewer", description: "Review changes.", invocation: "/superpowers:reviewer", model: "sonnet" }],
+            commandDetails: [{
+              name: "plan",
+              description: "Plugin planning prompt.",
+              invocation: "/superpowers:plan",
+            }, {
+              name: "blocked",
+              description: "Occupied canonical command.",
+              invocation: "/superpowers:blocked",
+              shadowed: true,
+            }],
             hookDetails: [{ event: "SessionStart", contextFile: "CLAUDE.md", description: "Load startup context." }],
-            mcpServerDetails: [{ name: "context", transport: "stdio", command: "node server.js" }],
+            mcpServerDetails: [{ name: "context", displayName: "Context Search", transport: "stdio", command: "node server.js", autoStart: false }],
           };
           plugins = plugins.filter((plugin) => plugin.name !== next.name).concat(next);
           return JSON.stringify({ ok: true, status: "done", actions: [{ action: "install_plugin_package", name: next.name, status: "done" }] });
@@ -396,6 +608,9 @@ console.log("capabilities panel plugin actions");
   await waitFor("plugin install plan", () => document.body.textContent?.includes("install_plugin_package") ?? false);
   ok(planCalls === 1, "clicking Preview invokes plugin install planning once");
   ok(plannedSources[0] === "git:github.com/obra/superpowers", "plugin preview receives the entered Git source");
+  ok(document.body.textContent?.includes("Partially compatible") ?? false, "preview renders compatibility status");
+  ok(document.body.textContent?.includes("Mapped: skills, agents") ?? false, "preview renders mapped capabilities");
+  ok(document.body.textContent?.includes("hook: unsupported event") ?? false, "preview renders skipped capability reasons");
 
   const install = findButton("Install plugin");
   if (!install) throw new Error("missing plugin install button");
@@ -414,8 +629,14 @@ console.log("capabilities panel plugin actions");
   });
   await waitFor("plugin update action", () => Boolean(findButton("Update")));
   ok(document.body.textContent?.includes("How to use") ?? false, "expanded plugin details explain how to use the plugin");
-  ok(document.body.textContent?.includes("/plan") ?? false, "expanded plugin details list exported skill invocations");
+  ok(document.body.textContent?.includes("/superpowers:plan") ?? false, "expanded plugin details list qualified skill invocations");
+  ok(document.body.textContent?.includes("/superpowers:plan") ?? false, "plugin details show the canonical qualified invocation");
+  ok(document.body.textContent?.includes("qualified name is occupied by a user or project command") ?? false, "occupied canonical command explains the winning source");
   ok(document.body.textContent?.includes("SessionStart") ?? false, "expanded plugin details list exported hooks");
+  ok(document.body.textContent?.includes("Fully compatible") ?? false, "plugin details show structured compatibility");
+  ok(document.body.textContent?.includes("/superpowers:reviewer") ?? false, "plugin details list imported agents");
+  ok(document.body.textContent?.includes("Context Search") ?? false, "plugin details retain MCP display names");
+  ok(document.body.textContent?.includes("on demand") ?? false, "imported MCP servers are labeled on demand");
   ok(document.body.textContent?.includes("context") ?? false, "expanded plugin details list exported MCP servers");
 
   const update = findButton("Update");

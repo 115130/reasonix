@@ -86,7 +86,8 @@ make cross      # -> dist/ (darwin|linux|windows × amd64|arm64)
 ## Quick start
 
 ```sh
-reasonix setup                      # config wizard → ./reasonix.toml
+reasonix setup                      # manage providers in the user config
+reasonix setup --local              # optional: manage ./reasonix.toml
 export DEEPSEEK_API_KEY=sk-...      # or let setup save it to Reasonix home .env
 reasonix                            # then run /init to generate AGENTS.md (project memory)
 reasonix run "implement the TODOs in main.go"
@@ -125,8 +126,18 @@ commands, `@` references, and two-model setup are all in the
 
 ## Documentation
 
+- **[CLI reference](./docs/CLI.md)** — interactive and one-shot commands,
+  structured output, resume, permission modes, and searchable pickers.
 - **[Guide](./docs/GUIDE.md)** — configuration, permissions & sandbox, plugins
   (MCP), slash commands, `@` references, two-model collaboration.
+- **[Subagent profiles](./docs/SUBAGENT_PROFILES.md)** — create, share, preview,
+  run, edit, and safely delete isolated agent profiles from desktop or CLI.
+- **[Capability diagnostics](./docs/CAPABILITY_DIAGNOSTICS.md)** —
+  `reasonix doctor capabilities`, desktop Settings → Diagnostics, and the
+  `/reasonix-guide` skill for skills/hooks/MCP/plugin troubleshooting.
+- **[Recovery and Safe Mode](./docs/RECOVERY.md)** — Guard diagnostics,
+  configuration snapshots, native recovery, update rollback, and optional
+  AI-assisted repair plans.
 - **[Bot guide](./docs/BOT_GUIDE.md)** — connect Feishu, Lark, and WeChat bots
   from the desktop app, then use approvals, YOLO, and commands from IM.
 - **[Spec](./docs/SPEC.md)** — engineering contract: architecture, registries,
@@ -169,20 +180,19 @@ If Reasonix has been useful and you'd like to say thanks, you can. It stays a co
 
 ## Acknowledgments
 
-A small list of folks whose work has shaped Reasonix the most — measured
-by both commit count and code volume. **Listed alphabetically, no ordering
-of importance.** The full contributor graph is on
-[GitHub](https://github.com/esengine/DeepSeek-Reasonix/graphs/contributors).
+A small list of folks whose work has shaped Reasonix the most — the current top
+20 contributors by commit count. The full contributor graph is on
+[GitHub](https://github.com/esengine/DeepSeek-Reasonix/graphs/contributors?all=1).
 
-- [**ctharvey**](https://github.com/ctharvey)
-- [**dimasd-angga**](https://github.com/dimasd-angga) (Dimas D. Angga)
-- [**Evan-Pycraft**](https://github.com/Evan-Pycraft)
-- [**ForeverYoungPp**](https://github.com/ForeverYoungPp)
-- [**GTC2080**](https://github.com/GTC2080) (TaoMu)
-- [**kabaka9527**](https://github.com/kabaka9527)
-- [**lisniuse**](https://github.com/lisniuse) (Richie)
-- [**wade19990814-hue**](https://github.com/wade19990814-hue)
-- [**wviana**](https://github.com/wviana) (Wesley Viana)
+<!-- reasonix-top-contributors:start -->
+| Contributor | Contributor | Contributor | Contributor |
+| --- | --- | --- | --- |
+| [**SivanCola**](https://github.com/SivanCola) | [**esengine**](https://github.com/esengine) | [**ttmouse**](https://github.com/ttmouse) | [**lifu963**](https://github.com/lifu963) |
+| **reasonix** (anonymous) | [**HUQIANTAO**](https://github.com/HUQIANTAO) | [**GTC2080**](https://github.com/GTC2080) | [**light-front-theory**](https://github.com/light-front-theory) |
+| **merge-order-check** (anonymous) | [**Li-Charles-One**](https://github.com/Li-Charles-One) | [**eghrhegpe**](https://github.com/eghrhegpe) | **wufengfan** (anonymous) |
+| [**CVEngineer66**](https://github.com/CVEngineer66) | [**dependabot\[bot\]**](https://github.com/apps/dependabot) | [**lanshi17**](https://github.com/lanshi17) | [**SuMuxi66**](https://github.com/SuMuxi66) |
+| [**CnsMaple**](https://github.com/CnsMaple) | [**cyq1017**](https://github.com/cyq1017) | [**JesonChou**](https://github.com/JesonChou) | [**XTLine**](https://github.com/XTLine) |
+<!-- reasonix-top-contributors:end -->
 
 Also a separate thank-you to [**Bernardxu123**](https://github.com/Bernardxu123)
 for designing the project logo, and to

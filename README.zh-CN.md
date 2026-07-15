@@ -81,7 +81,8 @@ make cross      # -> dist/（darwin|linux|windows × amd64|arm64）
 ## 快速开始
 
 ```sh
-reasonix setup                      # 配置向导 → ./reasonix.toml
+reasonix setup                      # 管理用户配置中的 provider
+reasonix setup --local              # 可选：管理 ./reasonix.toml
 export DEEPSEEK_API_KEY=sk-...      # 也可以让 setup 保存到 Reasonix 全局 .env
 reasonix                            # 然后在会话里运行 /init 生成 AGENTS.md（项目记忆）
 reasonix run "把 main.go 里的 TODO 实现掉"
@@ -115,8 +116,17 @@ provider key 的运行时 fallback，但仍会作为当前 workspace 范围内�
 
 ## 文档
 
+- **[CLI 命令参考](./docs/CLI.zh-CN.md)** —— 交互与一次性命令、结构化输出、
+  会话恢复、权限模式和可搜索选择器。
 - **[指南](./docs/GUIDE.zh-CN.md)** —— 配置、权限与沙盒、插件(MCP)、斜杠命令、
   `@` 引用、双模型协同。
+- **[子智能体 Profile](./docs/SUBAGENT_PROFILES.zh-CN.md)** —— 在桌面端或 CLI
+  创建、共享、预览、运行、编辑和安全删除隔离智能体 Profile。
+- **[能力诊断](./docs/CAPABILITY_DIAGNOSTICS.zh-CN.md)** ——
+  `reasonix doctor capabilities`、桌面端 **设置 → 诊断**，以及内置 Skill
+  `/reasonix-guide`，用于 skills / hooks / MCP / 插件排障。
+- **[恢复与安全模式](./docs/RECOVERY.zh-CN.md)** —— Guard 诊断、配置快照、
+  原生恢复、更新回滚和可选 AI 修复计划。
 - **[机器人使用指南](./docs/BOT_GUIDE.zh-CN.md)** —— 桌面端连接飞书、Lark、微信
   Bot，以及 IM 里的审批、YOLO 和命令交互。
 - **[规格](./docs/SPEC.md)** —— 工程契约:架构、registry、数据类型与路线图。
@@ -156,19 +166,19 @@ provider key 的运行时 fallback，但仍会作为当前 workspace 范围内�
 
 ## 致谢
 
-下面这些朋友的工作塑造了 Reasonix 今天的样子 —— 综合 commit 数和代码量两个维度。
-**按字母顺序排列，排名不分先后。** 完整贡献者列表在
-[GitHub](https://github.com/esengine/DeepSeek-Reasonix/graphs/contributors)。
+下面这些朋友的工作塑造了 Reasonix 今天的样子 —— 当前按 commit 数统计的前 20 名贡献者。
+完整贡献者列表在
+[GitHub](https://github.com/esengine/DeepSeek-Reasonix/graphs/contributors?all=1)。
 
-- [**ctharvey**](https://github.com/ctharvey)
-- [**dimasd-angga**](https://github.com/dimasd-angga)（Dimas D. Angga）
-- [**Evan-Pycraft**](https://github.com/Evan-Pycraft)
-- [**ForeverYoungPp**](https://github.com/ForeverYoungPp)
-- [**GTC2080**](https://github.com/GTC2080)（TaoMu）
-- [**kabaka9527**](https://github.com/kabaka9527)
-- [**lisniuse**](https://github.com/lisniuse)（Richie）
-- [**wade19990814-hue**](https://github.com/wade19990814-hue)
-- [**wviana**](https://github.com/wviana)（Wesley Viana）
+<!-- reasonix-top-contributors:start -->
+| Contributor | Contributor | Contributor | Contributor |
+| --- | --- | --- | --- |
+| [**SivanCola**](https://github.com/SivanCola) | [**esengine**](https://github.com/esengine) | [**ttmouse**](https://github.com/ttmouse) | [**lifu963**](https://github.com/lifu963) |
+| **reasonix**（anonymous） | [**HUQIANTAO**](https://github.com/HUQIANTAO) | [**GTC2080**](https://github.com/GTC2080) | [**light-front-theory**](https://github.com/light-front-theory) |
+| **merge-order-check**（anonymous） | [**Li-Charles-One**](https://github.com/Li-Charles-One) | [**eghrhegpe**](https://github.com/eghrhegpe) | **wufengfan**（anonymous） |
+| [**CVEngineer66**](https://github.com/CVEngineer66) | [**dependabot\[bot\]**](https://github.com/apps/dependabot) | [**lanshi17**](https://github.com/lanshi17) | [**SuMuxi66**](https://github.com/SuMuxi66) |
+| [**CnsMaple**](https://github.com/CnsMaple) | [**cyq1017**](https://github.com/cyq1017) | [**JesonChou**](https://github.com/JesonChou) | [**XTLine**](https://github.com/XTLine) |
+<!-- reasonix-top-contributors:end -->
 
 另外特别感谢 [**Bernardxu123**](https://github.com/Bernardxu123) 设计的项目 logo，
 以及 [AIGC Link](https://xhslink.com/m/80ngts127cA) 在小红书上的推广。

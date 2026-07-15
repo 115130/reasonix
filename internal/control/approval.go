@@ -78,6 +78,76 @@ func NewHeadlessPermissionGate(policy permission.Policy) *freshHumanHeadlessGate
 	return &freshHumanHeadlessGate{gate: permission.NewGate(policy, nil)}
 }
 
+// BuildHeadlessApprovalGate constructs the non-interactive gate for a given
+// approval mode, matching the contract ApplyHeadlessApprovalMode installs on a
+// running controller's parent executor. boot uses this as the single
+// construction point for every headless-only gate — the top-level executor,
+// the `task`/`read_only_task` sub-agent, writer-capable skill sub-agents
+// (run_skill/install_skill), and the planner runner — so all of them share the
+// CLI-selected headless approval mode instead of only the parent executor
+// getting it while the rest silently keep the mode-unaware default (ask
+// resolves to allow), which let a task sub-agent run a write an explicit ask
+// rule was supposed to deny under auto.
+func BuildHeadlessApprovalGate(policy permission.Policy, mode string) *freshHumanHeadlessGate {
+	switch normalizeToolApprovalMode(mode) {
+	case ToolApprovalYolo:
+		policy.Mode = permission.Allow
+		return NewHeadlessPermissionGate(policy)
+	case ToolApprovalAuto:
+		policy.Mode = permission.Allow
+		return &freshHumanHeadlessGate{gate: permission.NewGate(policy, denyPermissionApprover{})}
+	case ToolApprovalDontAsk:
+		policy.Mode = permission.Deny
+		return &freshHumanHeadlessGate{gate: permission.NewGate(policy, denyPermissionApprover{})}
+	default:
+		return NewHeadlessPermissionGate(policy)
+	}
+}
+
+// SharedHeadlessGate is a mutable, concurrency-safe holder for the
+// non-interactive gate that every headless-only sub-agent surface shares —
+// `task`/`read_only_task`, writer-capable skill sub-agents, and the planner
+// runner. Those surfaces capture their gate once at construction with no
+// rebuild hook of their own, unlike the parent executor's gate (rebuilt in
+// place via Agent.SetGate on every SetToolApprovalMode/
+// ApplyHeadlessApprovalMode call). Every consumer holds this same pointer and
+// reads through Check, so a runtime approval-mode switch (interactive
+// Shift+Tab, or a headless --permission-mode passed at boot) only needs to
+// call Update here to keep sub-agents on the same contract as the parent
+// instead of silently pinning them to whatever mode was active when they were
+// first constructed.
+type SharedHeadlessGate struct {
+	mu     sync.RWMutex
+	policy permission.Policy
+	gate   *freshHumanHeadlessGate
+}
+
+// NewSharedHeadlessGate builds a shared gate holder from the base policy and
+// the initial approval mode (see BuildHeadlessApprovalGate for the mode
+// contract).
+func NewSharedHeadlessGate(policy permission.Policy, mode string) *SharedHeadlessGate {
+	g := &SharedHeadlessGate{policy: policy}
+	g.Update(mode)
+	return g
+}
+
+// Update rebuilds the held gate for a new approval mode. Safe to call
+// concurrently with Check (a turn may be mid-flight on another goroutine when
+// the user switches modes).
+func (g *SharedHeadlessGate) Update(mode string) {
+	next := BuildHeadlessApprovalGate(g.policy, mode)
+	g.mu.Lock()
+	g.gate = next
+	g.mu.Unlock()
+}
+
+func (g *SharedHeadlessGate) Check(ctx context.Context, toolName string, args json.RawMessage, readOnly bool) (bool, string, error) {
+	g.mu.RLock()
+	gate := g.gate
+	g.mu.RUnlock()
+	return gate.Check(ctx, toolName, args, readOnly)
+}
+
 type freshHumanHeadlessGate struct {
 	gate *permission.Gate
 }
@@ -161,6 +231,41 @@ func (a *approvalManager) grantPlanModeReadOnlyCommand(prefix string) {
 	a.planModeReadOnlyCommands[prefix] = true
 }
 
+// SessionAuthorizations is the same-session tool-grant and Plan-mode
+// read-only command trust state a controller rebuild must carry forward; see
+// Controller.SessionAuthorizations / RestoreSessionAuthorizations.
+type SessionAuthorizations struct {
+	Grants                   []string
+	PlanModeReadOnlyCommands []string
+}
+
+func (a *approvalManager) snapshotSessionAuthorizations() SessionAuthorizations {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	auth := SessionAuthorizations{
+		Grants:                   make([]string, 0, len(a.granted)),
+		PlanModeReadOnlyCommands: make([]string, 0, len(a.planModeReadOnlyCommands)),
+	}
+	for rule := range a.granted {
+		auth.Grants = append(auth.Grants, rule)
+	}
+	for prefix := range a.planModeReadOnlyCommands {
+		auth.PlanModeReadOnlyCommands = append(auth.PlanModeReadOnlyCommands, prefix)
+	}
+	return auth
+}
+
+func (a *approvalManager) restoreSessionAuthorizations(auth SessionAuthorizations) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, rule := range auth.Grants {
+		a.granted[rule] = true
+	}
+	for _, prefix := range auth.PlanModeReadOnlyCommands {
+		a.planModeReadOnlyCommands[prefix] = true
+	}
+}
+
 // cancel drops a pending approval (timeout/abort path).
 func (a *approvalManager) cancel(id string) {
 	a.mu.Lock()
@@ -229,9 +334,9 @@ func (a *approvalManager) mode() string {
 }
 
 // setMode applies a (pre-normalized) posture and drains any pending approvals
-// the new posture should auto-allow, returning their reply channels for the
-// caller to signal after unlocking.
-func (a *approvalManager) setMode(mode string) []chan approvalReply {
+// the new posture should auto-allow, returning them for the caller to signal
+// {allow:true} after unlocking.
+func (a *approvalManager) setMode(mode string) []drainedApproval {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.toolApprovalMode = mode
@@ -309,11 +414,18 @@ func (a *approvalManager) sessionGrantAllowsLocked(tool, subject string) bool {
 	return false
 }
 
+// drainedApproval is a pending approval removed by a posture switch, keeping
+// its prompt id so frontends can dismiss exactly the prompts the new posture
+// resolved (fresh/plan/memory prompts stay pending and must stay visible).
+type drainedApproval struct {
+	id    string
+	reply chan approvalReply
+}
+
 // drainLocked removes every pending approval the new posture should auto-allow
-// and returns their reply channels; caller holds a.mu and sends {allow:true}
-// after unlocking.
-func (a *approvalManager) drainLocked(includeExplicitAsk bool) []chan approvalReply {
-	pending := make([]chan approvalReply, 0, len(a.approvals))
+// and returns them; caller holds a.mu and sends {allow:true} after unlocking.
+func (a *approvalManager) drainLocked(includeExplicitAsk bool) []drainedApproval {
+	pending := make([]drainedApproval, 0, len(a.approvals))
 	for id, approval := range a.approvals {
 		if approval.fresh || requiresFreshApprovalTool(approval.tool) {
 			continue
@@ -322,7 +434,7 @@ func (a *approvalManager) drainLocked(includeExplicitAsk bool) []chan approvalRe
 			continue
 		}
 		delete(a.approvals, id)
-		pending = append(pending, approval.reply)
+		pending = append(pending, drainedApproval{id: id, reply: approval.reply})
 	}
 	return pending
 }
@@ -333,6 +445,8 @@ func normalizeToolApprovalMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case ToolApprovalAuto, "approve", "allow":
 		return ToolApprovalAuto
+	case "dontask", "dont-ask", "deny":
+		return ToolApprovalDontAsk
 	case ToolApprovalYolo, "full", "full-access", "bypass":
 		return ToolApprovalYolo
 	default:

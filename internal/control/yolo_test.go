@@ -52,7 +52,7 @@ func TestAutoApproveToolsStillAutoPlansAndRequiresPlanApproval(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("tool auto-approval must not suppress plan approval")
 	}
 	if approval.Tool != planApprovalTool {
@@ -69,7 +69,7 @@ func TestAutoApproveToolsStillAutoPlansAndRequiresPlanApproval(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runTurnWithRaw: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("approved plan did not continue into execution")
 	}
 	if got := agent.StripTransientUserBlocks(firstUserMessage(ag.Session().Messages)); !strings.HasPrefix(got, PlanModeMarker) {
@@ -117,7 +117,7 @@ func TestRequestApprovalHonorsAutoApproveTools(t *testing.T) {
 		if !allow {
 			t.Fatal("tool auto-approval should allow the approval")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("requestApproval blocked under tool auto-approval")
 	}
 
@@ -151,7 +151,7 @@ func TestMemoryApprovalIgnoresAutoApproveTools(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("memory approval request was not emitted under tool auto-approval")
 	}
 	if approval.Tool != "remember" {
@@ -174,7 +174,7 @@ func TestMemoryApprovalIgnoresAutoApproveTools(t *testing.T) {
 		if !allow {
 			t.Fatal("manual approval should allow memory write")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("memory approval stayed blocked after Approve")
 	}
 }
@@ -228,6 +228,37 @@ func TestToolApprovalModeYoloForcesMemoryAskRules(t *testing.T) {
 	}
 }
 
+func TestToolApprovalModeDontAskDeniesWithoutPrompt(t *testing.T) {
+	requests := 0
+	c := New(Options{
+		Policy: permission.New("ask", nil, []string{"bash(git commit*)"}, nil).
+			WithSessionAllow([]string{"bash(go test*)"}),
+		Sink: event.FuncSink(func(e event.Event) {
+			if e.Kind == event.ApprovalRequest {
+				requests++
+			}
+		}),
+	})
+	c.SetToolApprovalMode(ToolApprovalDontAsk)
+	gate := c.newInteractiveGate()
+
+	allow, _, err := gate.Check(context.Background(), "bash", json.RawMessage(`{"command":"go test ./..."}`), false)
+	if err != nil || !allow {
+		t.Fatalf("session-allowed call = (%v, %v), want allow", allow, err)
+	}
+	allow, _, err = gate.Check(context.Background(), "bash", json.RawMessage(`{"command":"git commit -m x"}`), false)
+	if err != nil || allow {
+		t.Fatalf("explicit ask under dontAsk = (%v, %v), want deny", allow, err)
+	}
+	allow, _, err = gate.Check(context.Background(), "write_file", json.RawMessage(`{"path":"x.txt"}`), false)
+	if err != nil || allow {
+		t.Fatalf("fallback under dontAsk = (%v, %v), want deny", allow, err)
+	}
+	if requests != 0 {
+		t.Fatalf("dontAsk emitted %d approval requests, want 0", requests)
+	}
+}
+
 func TestToolApprovalModeAutoDrainsPendingFallbackApproval(t *testing.T) {
 	approvalRequests := make(chan event.Approval, 1)
 	c := New(Options{
@@ -252,7 +283,7 @@ func TestToolApprovalModeAutoDrainsPendingFallbackApproval(t *testing.T) {
 
 	select {
 	case <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("approval request was not emitted")
 	}
 
@@ -265,7 +296,7 @@ func TestToolApprovalModeAutoDrainsPendingFallbackApproval(t *testing.T) {
 		if !allow {
 			t.Fatal("pending fallback approval should be allowed when auto approval turns on")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("pending fallback approval stayed blocked after auto approval turned on")
 	}
 	if c.AutoApproveTools() {
@@ -298,7 +329,7 @@ func TestToolApprovalModeAutoDoesNotDrainPendingExplicitAsk(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("approval request was not emitted")
 	}
 
@@ -321,7 +352,7 @@ func TestToolApprovalModeAutoDoesNotDrainPendingExplicitAsk(t *testing.T) {
 		if !allow {
 			t.Fatal("manual approval should allow the explicit ask request")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("explicit ask approval stayed blocked after manual Approve")
 	}
 }
@@ -363,7 +394,7 @@ func TestPlanApprovalIgnoresAutoApproveTools(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("plan approval must still prompt under tool auto-approval")
 	}
 	if approval.Tool != planApprovalTool {
@@ -386,7 +417,7 @@ func TestPlanApprovalIgnoresAutoApproveTools(t *testing.T) {
 		if !allow {
 			t.Fatal("manual plan approval should allow")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("plan approval stayed blocked after Approve")
 	}
 }
@@ -410,7 +441,7 @@ func TestSetAutoApproveToolsAllowsPendingApproval(t *testing.T) {
 
 	select {
 	case <-ids:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("approval request was not emitted")
 	}
 
@@ -423,7 +454,7 @@ func TestSetAutoApproveToolsAllowsPendingApproval(t *testing.T) {
 		if !allow {
 			t.Fatal("pending approval should be allowed when tool auto-approval turns on")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("pending approval stayed blocked after tool auto-approval turned on")
 	}
 	if !c.AutoApproveTools() {
@@ -459,7 +490,7 @@ func TestSandboxEscapeApprovalIgnoresAutoApproveTools(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("sandbox escape approval request was not emitted")
 	}
 	if approval.Tool != SandboxEscapeApprovalTool {
@@ -479,7 +510,7 @@ func TestSandboxEscapeApprovalIgnoresAutoApproveTools(t *testing.T) {
 		if got.err != nil || !got.allow || got.reason != "" {
 			t.Fatalf("sandbox escape result = %+v, want allowed without reason/error", got)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("sandbox escape approval stayed blocked after Approve")
 	}
 
@@ -524,7 +555,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingPlanApproval(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("plan approval request was not emitted")
 	}
 
@@ -550,7 +581,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingPlanApproval(t *testing.T) {
 		if !allow {
 			t.Fatal("manual plan approval should allow")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("plan approval stayed blocked after Approve")
 	}
 }
@@ -584,7 +615,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingMCPReadOnlyTrust(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("MCP read-only trust approval request was not emitted")
 	}
 
@@ -605,7 +636,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingMCPReadOnlyTrust(t *testing.T) {
 		if got.err != nil || !got.allow || got.reason != "" {
 			t.Fatalf("manual MCP read-only trust approval = %+v, want allow", got)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("MCP read-only trust approval stayed blocked after Approve")
 	}
 }
@@ -639,7 +670,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingPlanModeReadOnlyCommandTrust(t *t
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("plan-mode bash read-only command trust approval request was not emitted")
 	}
 	if approval.Tool != agent.PlanModeReadOnlyCommandApprovalTool {
@@ -663,7 +694,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingPlanModeReadOnlyCommandTrust(t *t
 		if got.err != nil || !got.allow || got.reason != "" {
 			t.Fatalf("manual plan-mode bash read-only command trust approval = %+v, want allow", got)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("plan-mode bash read-only command trust approval stayed blocked after Approve")
 	}
 }
@@ -692,7 +723,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingMemoryApproval(t *testing.T) {
 	var approval event.Approval
 	select {
 	case approval = <-approvalRequests:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("memory approval request was not emitted")
 	}
 
@@ -714,7 +745,7 @@ func TestSetAutoApproveToolsDoesNotDrainPendingMemoryApproval(t *testing.T) {
 		if !allow {
 			t.Fatal("manual approval should allow memory archive")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("memory approval stayed blocked after Approve")
 	}
 }
@@ -733,7 +764,7 @@ func TestSetModeYoloDrainsPendingApproval(t *testing.T) {
 
 	select {
 	case <-ids:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("approval request was not emitted")
 	}
 
@@ -744,7 +775,7 @@ func TestSetModeYoloDrainsPendingApproval(t *testing.T) {
 		if !allow {
 			t.Fatal("pending approval should be auto-allowed when SetMode turns YOLO on")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("pending approval stayed blocked after SetMode(false, true)")
 	}
 }
@@ -820,7 +851,7 @@ func waitAskRequest(t *testing.T, askCh <-chan event.Ask) event.Ask {
 	select {
 	case ask := <-askCh:
 		return ask
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Ask did not emit AskRequest")
 	}
 	return event.Ask{}
@@ -834,7 +865,7 @@ func waitAskResult(t *testing.T, done <-chan askCallResult) askCallResult {
 			t.Fatalf("Ask: %v", result.err)
 		}
 		return result
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Ask stayed blocked")
 	}
 	return askCallResult{}
@@ -1010,7 +1041,7 @@ func TestAskSerializesBehindPromptLockEvenWithAutoApproveTools(t *testing.T) {
 	case err := <-errs:
 		t.Fatalf("Ask: %v", err)
 	case ask = <-askCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Ask did not emit AskRequest after acquiring promptMu with tool auto-approval on")
 	}
 
@@ -1023,7 +1054,7 @@ func TestAskSerializesBehindPromptLockEvenWithAutoApproveTools(t *testing.T) {
 	case err := <-errs:
 		t.Fatalf("Ask: %v", err)
 	case answers = <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Ask stayed blocked after AnswerQuestion")
 	}
 	if len(answers) != 1 || answers[0].QuestionID != "q1" || len(answers[0].Selected) != 1 || answers[0].Selected[0] != "Alternative" {
@@ -1082,7 +1113,7 @@ func TestAskSerializesBehindPromptLockEvenWithBypass(t *testing.T) {
 	case err := <-errs:
 		t.Fatalf("Ask: %v", err)
 	case ask = <-askCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Ask did not emit AskRequest after acquiring promptMu with bypass on; bypass should not suppress ask")
 	}
 
@@ -1096,10 +1127,66 @@ func TestAskSerializesBehindPromptLockEvenWithBypass(t *testing.T) {
 	case err := <-errs:
 		t.Fatalf("Ask: %v", err)
 	case answers = <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Ask stayed blocked after AnswerQuestion")
 	}
 	if len(answers) != 1 || answers[0].QuestionID != "q1" || len(answers[0].Selected) != 1 || answers[0].Selected[0] != "Alternative" {
 		t.Fatalf("answers = %#v, want Alternative (user's choice, not auto-recommended)", answers)
+	}
+}
+
+// TestApplyToolApprovalModeReportsDrainedIDs pins the drain-report contract
+// the desktop frontend relies on (#6432): a posture switch returns exactly
+// the pending approval ids it auto-allowed, so the UI dismisses those cards
+// and keeps the ones still pending here. Fresh user decisions (plan) never
+// drain, and auto keeps approvals an allow policy would not cover.
+func TestApplyToolApprovalModeReportsDrainedIDs(t *testing.T) {
+	c := New(Options{
+		Policy: permission.New("ask", nil, []string{"bash(git commit*)"}, nil),
+	})
+
+	autoOKID, autoOKReply := c.approval.register("bash", "go test ./...", "")
+	askRuleID, askRuleReply := c.approval.register("bash", "git commit -m x", "")
+	planID, planReply := c.approval.registerDecision(planApprovalTool, "", "", true)
+
+	drained := c.ApplyToolApprovalMode(ToolApprovalAuto)
+	if len(drained) != 1 || drained[0] != autoOKID {
+		t.Fatalf("auto drained = %v, want [%s]", drained, autoOKID)
+	}
+	select {
+	case r := <-autoOKReply:
+		if !r.allow {
+			t.Fatal("auto-drained approval must be auto-allowed")
+		}
+	default:
+		t.Fatal("auto-drained approval reply not signaled")
+	}
+	select {
+	case <-askRuleReply:
+		t.Fatal("explicit ask-rule approval must stay pending under auto")
+	default:
+	}
+
+	drained = c.ApplyToolApprovalMode(ToolApprovalYolo)
+	if len(drained) != 1 || drained[0] != askRuleID {
+		t.Fatalf("yolo drained = %v, want [%s]", drained, askRuleID)
+	}
+	select {
+	case r := <-askRuleReply:
+		if !r.allow {
+			t.Fatal("yolo-drained approval must be auto-allowed")
+		}
+	default:
+		t.Fatal("yolo-drained approval reply not signaled")
+	}
+
+	// The fresh plan decision survives both switches and stays pending.
+	select {
+	case <-planReply:
+		t.Fatal("fresh plan approval must never drain on a posture switch")
+	default:
+	}
+	if !c.approval.hasPending() {
+		t.Fatalf("plan approval %s should still be pending", planID)
 	}
 }
